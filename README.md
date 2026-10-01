@@ -1,6 +1,6 @@
 # Similar Works
 
-![Built with AI · DeepSeek & ChatGPT](https://img.shields.io/badge/Built%20with%20AI-DeepSeek%20%26%20ChatGPT-412991?style=flat)
+![AI Assisted · ChatGPT](.github/badges/ai-assisted-chatgpt.svg) ![AI Assisted · DeepSeek](.github/badges/ai-assisted-deepseek.svg)
 
 在 Zotero 右侧栏推荐同一文献库中相似的前 10 篇文献。点击刷新计算相似度，点击结果打开对应条目。复用 Zotero 全文缓存，所有计算在本地完成。
 
