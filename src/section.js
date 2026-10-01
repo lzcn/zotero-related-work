@@ -38,7 +38,6 @@ var SWSection = {
 	_rootURI: null,
 	_registered: null,
 	_active: [],
-	_refreshTimer: null,
 	_stopped: false,
 	_windows: new Set(),
 
@@ -58,8 +57,6 @@ var SWSection = {
 			},
 			onDestroy: ({ body }) => {
 				body._swToken = (body._swToken || 0) + 1;
-				if (body._swReadyListener) body._swReadyListener();
-				body._swReadyListener = null;
 				self._active = self._active.filter(e => e.body !== body);
 			},
 			onItemChange: (props) => {
@@ -127,20 +124,6 @@ var SWSection = {
 	_track(props) {
 		this._active = this._active.filter(e => e.body.isConnected && e.body !== props.body);
 		this._active.push(props);
-	},
-
-	maybeRefresh() {
-		if (this._stopped || this._refreshTimer !== null || !this._active.length) return;
-		// Merge all background notifications, including drain completion, into
-		// one update. Item selection and the explicit refresh button stay immediate.
-		this._refreshTimer = setTimeout(() => {
-			this._refreshTimer = null;
-			if (this._stopped) return;
-			for (var entry of this._active) {
-				if (entry.body.isConnected) this.renderBody(entry);
-			}
-		}, SWPref("recommendationRefreshIntervalMs", 30000));
-		this._refreshTimer?.unref?.();
 	},
 
 	setStatus(body, text, clearRows = true) {
@@ -442,8 +425,6 @@ var SWSection = {
 
 	shutdown() {
 		this._stopped = true;
-		if (this._refreshTimer !== null) clearTimeout(this._refreshTimer);
-		this._refreshTimer = null;
 		for (var entry of this._active) entry.body._swToken++;
 		try {
 			if (this._registered) {

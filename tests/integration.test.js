@@ -157,22 +157,14 @@ test('switching items during a delayed render discards previous results; closed 
 	assert.equal(calls, 2);
 });
 
-test('background updates coalesce and keep existing rows until results are ready', async () => {
+test('background updates keep existing rows until explicit refresh finishes', async () => {
 	const h = harness(), q = h.item(1, 'machine learning'), a = h.item(2, 'machine learning');
 	for (const it of [q, a]) await h.SWIndexer.processItem(it);
 	const props = { body: h.body, item: q };
 	await h.SWSection.renderBody(props, true);
 	const original = h.body.querySelector('.sw-row');
-	let callback, delay, schedules = 0, cancelled = false;
-	h.context.setTimeout = (fn, ms) => { callback = fn; delay = ms; schedules++; return 1; };
-	h.context.clearTimeout = () => { cancelled = true; };
-	for (let i = 0; i < 100; i++) h.SWSection.maybeRefresh(i % 2 === 0);
-	assert.equal(schedules, 1);
-	assert.equal(delay, 30000);
-	assert.equal(h.body.querySelector('.sw-row'), original);
-	callback();
-	await new Promise(resolve => setImmediate(resolve));
-	assert.equal(h.body.querySelector('.sw-row'), original, 'unchanged results keep DOM and focus');
+	await h.SWIndexer.processItem(h.item(3, 'machine learning'));
+	assert.equal(h.body.querySelector('.sw-row'), original, 'background vector updates leave the current results unchanged');
 	let release;
 	const ensure = h.SWIndexer.ensureNow.bind(h.SWIndexer);
 	h.SWIndexer.ensureNow = async it => { await new Promise(resolve => release = resolve); return ensure(it); };
@@ -189,14 +181,12 @@ test('background updates coalesce and keep existing rows until results are ready
 	assert.equal(h.body['aria-busy'], 'false');
 	assert.equal(h.body.querySelector('.sw-computation-progress').hidden, true);
 	assert.match(h.body.querySelector('.sw-status').textContent, /Updated/);
-	h.SWSection.maybeRefresh(); h.SWSection.shutdown();
-	assert.equal(cancelled, true);
+	h.SWSection.shutdown();
 });
 
 test('each manual refresh computes online; background progress never computes scores', async () => {
 	const h = harness(), q = h.item(1, 'machine learning'), a = h.item(2, 'machine learning');
 	for (const it of [q, a]) await h.SWIndexer.processItem(it);
-	h.SWIndexer._documentKeys = new Set(['1/KEY1', '1/KEY2']);
 	const props = { body: h.body, item: q };
 	let calculations = 0;
 	const score = h.corpus.scoreTopKAsync.bind(h.corpus);

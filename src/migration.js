@@ -18,7 +18,7 @@ var SWMigration = {
   if (typeof Services !== "undefined" && Services.prefs?.prefHasUserValue) {
    for (var name of ["recommendationCount", "minTokenLength", "maxTextChars", "backgroundIndexing",
     "indexDelayMs", "allowMetadataOnlyRecommendations", "minFulltextTerms",
-    "recommendationRefreshIntervalMs", "backgroundStartupDelayMs", "requestMissingFulltext"]) {
+    "backgroundStartupDelayMs", "requestMissingFulltext"]) {
     var oldName = "extensions.zotero.relatedwork." + name;
     if (Services.prefs.prefHasUserValue(oldName)) {
      if (!Services.prefs.prefHasUserValue("extensions.zotero.similarworks." + name)) {
@@ -29,7 +29,7 @@ var SWMigration = {
    }
   }
   // Obsolete exposed controls have no equivalent in the minimal interface.
-  for (var name of ["maxResults", "includeMetadataOnly"]) {
+  for (var name of ["maxResults", "includeMetadataOnly", "recommendationRefreshIntervalMs"]) {
    var obsolete = "extensions.zotero.relatedwork." + name;
    if (Services.prefs.prefHasUserValue(obsolete)) Services.prefs.clearUserPref(obsolete);
   }

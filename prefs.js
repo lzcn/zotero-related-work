@@ -6,6 +6,5 @@ pref("extensions.zotero.similarworks.backgroundIndexing", true);
 pref("extensions.zotero.similarworks.indexDelayMs", 1000);
 pref("extensions.zotero.similarworks.allowMetadataOnlyRecommendations", true);
 pref("extensions.zotero.similarworks.minFulltextTerms", 25);
-pref("extensions.zotero.similarworks.recommendationRefreshIntervalMs", 30000);
 pref("extensions.zotero.similarworks.backgroundStartupDelayMs", 15000);
 pref("extensions.zotero.similarworks.requestMissingFulltext", false);

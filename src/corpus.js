@@ -22,8 +22,6 @@ var SWCorpus = class {
 		this._dbPath = null;
 		this.progress = { phase: "idle", done: 0, total: 0 };
 		this._ready = null;
-		this._readyResolved = false;
-		this._readyListeners = new Set();
 	}
 
 	get ready() {
@@ -31,15 +29,6 @@ var SWCorpus = class {
 			this._ready = this._openAndLoad();
 		}
 		return this._ready;
-	}
-
-	onReady(fn) {
-		if (this._readyResolved) {
-			fn();
-			return () => { };
-		}
-		this._readyListeners.add(fn);
-		return () => this._readyListeners.delete(fn);
 	}
 
 	async _openAndLoad() {
@@ -53,11 +42,7 @@ var SWCorpus = class {
 			await this._db.execute("PRAGMA journal_mode = WAL");
 			await this._ensureSchema();
 			await this._loadAll();
-			this._readyResolved = true;
-			for (var fn of Array.from(this._readyListeners)) {
-				try { fn(); } catch (e) { Zotero.logError(e); }
-			}
-			this._readyListeners.clear();
+
 		}
 		catch (e) {
 			Zotero.logError("[similar-works] corpus init failed: " + (e && e.message ? e.message : e));

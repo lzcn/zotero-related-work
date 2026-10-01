@@ -23,7 +23,6 @@ var SWIndexer = {
 	_drainPromise: null,
 	_scanPromise: null,
 	_requestedFulltext: new Set(),
-	_documentKeys: null,
 	_pendingRemovals: new Set(),
 	_draining: false,
 	_notifierID: null,
@@ -92,10 +91,8 @@ var SWIndexer = {
 		if (!key && extra.libraryID && extra.key) key = extra.libraryID + "/" + extra.key;
 		if (key) {
 			await this.corpus.removeDoc(key);
-			this._documentKeys?.delete(key);
 		}
 		this._itemKeys.delete(id);
-		SWSection.maybeRefresh(true);
 	},
 
 	docKey(item) {
@@ -151,8 +148,6 @@ var SWIndexer = {
 				if (this._stopped) return;
 				if (!live.has(key)) await this.corpus.removeDoc(key);
 			}
-			this._documentKeys = live;
-			SWSection.maybeRefresh(true);
 		}
 		catch (e) { Zotero.logError(e); }
 	},
@@ -168,13 +163,11 @@ var SWIndexer = {
 				var id = this._queue.shift();
 				this._queued.delete(id);
 				await this._processId(id);
-				SWSection.maybeRefresh(false);
 				await swYield(SWPref("indexDelayMs", 1000));
 			}
 		}
 		finally {
 			this._draining = false;
-			if (!this._stopped) SWSection.maybeRefresh(true);
 		}
 	},
 
@@ -230,7 +223,6 @@ var SWIndexer = {
 			return;
 		}
 		var key = this.docKey(item);
-		if (!item.deleted) this._documentKeys?.add(key);
 		if (item.deleted) {
 			await this.corpus.removeDoc(key);
 			return;
@@ -387,11 +379,6 @@ var SWIndexer = {
 		}
 		var content = parts.join("\n");
 		return { content: content, hash: "m" + SWTokenizer.swFnv1a(content), weak: true };
-	},
-
-	stats() {
-		return { queued: this._queue.length, draining: this._draining,
-			indexed: this.corpus?.n || 0, total: this._documentKeys?.size ?? null };
 	},
 
 	async shutdown() {
