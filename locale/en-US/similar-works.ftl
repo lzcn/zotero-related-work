@@ -1,12 +1,15 @@
-similarworks-header =
+similar-works-header =
     .label = Similar Works
-similarworks-sidenav =
+similar-works-sidenav =
     .tooltiptext = Similar Works
-similarworks-refresh =
+similar-works-refresh =
     .tooltiptext = Refresh similar works
-similarworks-computing = Computing similarity…
-similarworks-empty = No similar items found in this library
-similarworks-no-text = No analyzable full text or abstract for this item
-similarworks-unavailable = Similarity index unavailable
-similarworks-based-on-weak = metadata only
-similarworks-updated = Updated
+similar-works-computing = Computing similarity…
+similar-works-empty = No similar items found in this library
+similar-works-no-text = No analyzable full text or abstract for this item
+similar-works-unavailable = Similarity index unavailable
+similar-works-based-on-weak = metadata only
+similar-works-updated = Updated
+
+similar-works-cached = Cached results
+similar-works-updating = Updating…

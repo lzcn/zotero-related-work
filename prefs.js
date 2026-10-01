@@ -1,10 +1,10 @@
 // Internal defaults; this minimal version intentionally has no settings UI.
-pref("extensions.zotero.similarworks.recommendationCount", 10);
-pref("extensions.zotero.similarworks.minTokenLength", 2);
-pref("extensions.zotero.similarworks.maxTextChars", 1200000);
-pref("extensions.zotero.similarworks.backgroundIndexing", true);
-pref("extensions.zotero.similarworks.indexDelayMs", 1000);
-pref("extensions.zotero.similarworks.allowMetadataOnlyRecommendations", true);
-pref("extensions.zotero.similarworks.minFulltextTerms", 25);
-pref("extensions.zotero.similarworks.backgroundStartupDelayMs", 15000);
-pref("extensions.zotero.similarworks.requestMissingFulltext", false);
+pref("extensions.zotero.similar-works.recommendationCount", 10);
+pref("extensions.zotero.similar-works.minTokenLength", 2);
+pref("extensions.zotero.similar-works.maxTextChars", 1200000);
+pref("extensions.zotero.similar-works.backgroundIndexing", true);
+pref("extensions.zotero.similar-works.indexDelayMs", 1000);
+pref("extensions.zotero.similar-works.allowMetadataOnlyRecommendations", true);
+pref("extensions.zotero.similar-works.minFulltextTerms", 25);
+pref("extensions.zotero.similar-works.backgroundStartupDelayMs", 15000);
+pref("extensions.zotero.similar-works.requestMissingFulltext", false);

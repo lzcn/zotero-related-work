@@ -3,14 +3,18 @@
   "name": "Similar Works",
   "version": "0.1.0",
   "description": "Find similar works in your Zotero library using existing full-text indexes. Local, incremental, and lightweight.",
-  "author": "zhi",
+  "author": "Zhi Lu",
   "applications": {
     "zotero": {
       "id": "similar-works@lzcn",
       "strict_min_version": "7.0",
       "strict_max_version": "10.*",
-      "update_url": "https://raw.githubusercontent.com/lzcn/zotero-similar-works/main/updates.json"
+      "update_url": "https://github.com/lzcn/zotero-similar-works/releases/latest/download/updates.json"
     }
   },
-  "homepage_url": "https://github.com/lzcn/zotero-similar-works"
+  "homepage_url": "https://github.com/lzcn/zotero-similar-works",
+  "icons": {
+    "48": "icons/icon-48.png",
+    "96": "icons/icon-96.png"
+  }
 }

@@ -1,6 +1,6 @@
 function SWPref(name, fallback) {
   try {
-    var v = Zotero.Prefs.get("similarworks." + name);
+    var v = Zotero.Prefs.get("similar-works." + name);
     return v === undefined || v === null ? fallback : v;
   } catch (e) {
     return fallback;
@@ -304,6 +304,7 @@ var SWIndexer = {
     return tf;
   },
 
+  /** @param {Zotero.Item} item */
   async extractText(item) {
     if (item.isRegularItem()) {
       var atts = [];
@@ -343,7 +344,7 @@ var SWIndexer = {
         key: this.docKey(att),
         parentID: att.parentItemID,
       });
-      var fulltext = Zotero.Fulltext || Zotero.FullText;
+      var fulltext = Zotero.Fulltext;
       var mime = att.attachmentContentType || "";
       if (!fulltext.isCachedMIMEType(mime) && mime !== "text/plain") {
         return null;
@@ -352,9 +353,11 @@ var SWIndexer = {
       var path = fulltext.getItemCacheFile(att).path;
       var have = await IOUtils.exists(path);
       if (!have && mime === "text/plain") {
-        var indexed = await Zotero.DB.valueQueryAsync(
-          "SELECT indexedChars FROM fulltextItems WHERE itemID=?",
-          [att.id],
+        var indexed = Number(
+          await Zotero.DB.valueQueryAsync(
+            "SELECT indexedChars FROM fulltextItems WHERE itemID=?",
+            [att.id],
+          ),
         );
         path = indexed > 0 ? await att.getFilePathAsync() : null;
         if (path) have = await IOUtils.exists(path);

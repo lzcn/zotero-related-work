@@ -66,7 +66,7 @@ class Element {
 
 function harness() {
   const items = new Map(),
-    prefs = new Map([["similarworks.minFulltextTerms", 1]]);
+    prefs = new Map([["similar-works.minFulltextTerms", 1]]);
   const files = new Map(),
     queued = [],
     errors = [],
@@ -226,7 +226,7 @@ test("permanent deletion uses notifier identity; startup prunes stale and child 
   await h.SWIndexer._removeById(99, { libraryID: 1, key: "GONE" });
   assert.equal(h.corpus.n, 0);
   await h.corpus.upsertDoc("1/STALE", "x", false, new Map([["machine", 1]]));
-  h.prefs.set("similarworks.backgroundIndexing", false);
+  h.prefs.set("similar-works.backgroundIndexing", false);
   await h.SWIndexer.enqueueLibrary();
   assert.equal(h.corpus.n, 0);
 });
@@ -238,7 +238,7 @@ test("sidebar ranks top K in same library, preserves rows during indexing, and n
     b = h.item(3, "machine learning algorithm"),
     other = h.item(4, "neural machine learning", null, 2);
   for (const it of [query, a, b, other]) await h.SWIndexer.processItem(it);
-  h.prefs.set("similarworks.recommendationCount", 2);
+  h.prefs.set("similar-works.recommendationCount", 2);
   h.SWIndexer._draining = true;
   let summary;
   const props = {
@@ -272,10 +272,10 @@ test("sidebar ranks top K in same library, preserves rows during indexing, and n
   );
   assert.equal(h.body.querySelector("input[type=number]"), null);
   assert.equal(h.body.querySelector("input[type=checkbox]"), null);
-  h.prefs.set("similarworks.recommendationCount", 1);
+  h.prefs.set("similar-works.recommendationCount", 1);
   await h.SWSection.renderBody(props, true);
   assert.equal(h.body.querySelectorAll(".sw-row").length, 1);
-  h.prefs.set("similarworks.allowMetadataOnlyRecommendations", false);
+  h.prefs.set("similar-works.allowMetadataOnlyRecommendations", false);
   await h.SWSection.renderBody(props, true);
   assert.equal(h.body.querySelectorAll(".sw-row").length, 0);
   assert.equal(h.errors.length, 0);
@@ -354,7 +354,7 @@ test("background updates keep existing rows until explicit refresh finishes", as
   h.SWSection.shutdown();
 });
 
-test("each manual refresh computes online; background progress never computes scores", async () => {
+test("opening computes once; fresh cache is reused; stale cache stays visible during revalidation", async () => {
   const h = harness(),
     q = h.item(1, "machine learning"),
     a = h.item(2, "machine learning");
@@ -367,24 +367,87 @@ test("each manual refresh computes online; background progress never computes sc
     return score(...args);
   };
   await h.SWSection.renderBody(props);
-  assert.equal(calculations, 0);
-  assert.equal(h.body.querySelectorAll(".sw-row").length, 0);
-  assert.equal(h.body.querySelector(".sw-progress"), null);
-  await h.SWSection.renderBody(props, true);
   assert.equal(calculations, 1);
+  assert.equal(h.body.querySelectorAll(".sw-row").length, 1);
+  await h.SWSection.renderBody(props);
+  assert.equal(calculations, 1, "unchanged index reuses cache");
   await h.SWSection.renderBody(props, true);
+  assert.equal(calculations, 2, "explicit refresh bypasses cache");
+  await h.SWIndexer.processItem(h.item(3, "machine learning algorithm"));
+  let release;
+  h.corpus.scoreTopKAsync = async (...args) => {
+    calculations++;
+    await new Promise((r) => (release = r));
+    return score(...args);
+  };
+  const original = h.body.querySelector(".sw-row");
+  const pending = h.SWSection.renderBody(props);
+  await new Promise((r) => setImmediate(r));
+  assert.equal(h.body.querySelector(".sw-row"), original);
+  assert.equal(h.body.querySelector(".sw-computation-progress").hidden, true);
+  await h.SWSection.renderBody(props);
   assert.equal(
     calculations,
-    2,
-    "every explicit refresh computes scores without a persisted matrix",
+    3,
+    "duplicate render does not start another calculation",
   );
-  await h.SWSection.renderBody(props);
-  assert.equal(calculations, 2);
-  const b = h.item(3, "machine learning algorithm");
-  await h.SWIndexer.processItem(b);
-  await h.SWSection.renderBody(props, true);
-  assert.equal(calculations, 3, "refresh includes newly built vectors");
+  release();
+  await pending;
   assert.equal(h.body.querySelectorAll(".sw-row").length, 2);
+});
+
+test("database recommendations survive restart; changed revisions and age invalidate freshness", async () => {
+  const h = harness(),
+    payloads = new Map();
+  h.corpus._db = {
+    async executeTransaction(fn) {
+      await fn();
+    },
+    async execute(sql, args) {
+      if (sql.startsWith("INSERT OR REPLACE INTO recommendations"))
+        payloads.set(args[0], args[1]);
+      if (sql.startsWith("SELECT payload"))
+        return payloads.has(args[0])
+          ? [{ getResultByName: () => payloads.get(args[0]) }]
+          : [];
+      return [];
+    },
+  };
+  await h.corpus.upsertDoc("1/A", "a", false, new Map([["learning", 2]]));
+  await h.corpus.saveRecommendations(
+    "1/A",
+    true,
+    [{ key: "1/B", score: 0.9, weak: false }],
+    h.corpus.revision,
+    "a",
+  );
+  h.corpus._recommendations.clear();
+  const cached = await h.corpus.getRecommendations("1/A", true);
+  assert.equal(cached.matches[0].score, 0.9);
+  assert.equal(h.corpus.recommendationsFresh(cached, "1/A"), true);
+  assert.equal(
+    await h.corpus.getRecommendations("1/A", false),
+    null,
+    "filter caches are independent",
+  );
+  cached.computedAt -= 25 * 60 * 60 * 1000;
+  assert.equal(h.corpus.recommendationsFresh(cached, "1/A"), false);
+  cached.computedAt = Date.now();
+  const revision = h.corpus.revision;
+  await h.corpus.upsertDoc("1/B", "b", false, new Map([["learning", 1]]));
+  assert.equal(h.corpus.recommendationsFresh(cached, "1/A"), false);
+  await h.corpus.saveRecommendations("1/A", true, [], revision, "a");
+  assert.equal(
+    (await h.corpus.getRecommendations("1/A", true)).matches.length,
+    1,
+    "obsolete in-flight results cannot overwrite cache",
+  );
+  payloads.set(JSON.stringify(["1/C", true]), "invalid JSON");
+  assert.equal(
+    await h.corpus.getRecommendations("1/C", true),
+    null,
+    "bad cache is recoverable",
+  );
 });
 
 test("cooperative tokenization keeps word and CJK boundaries; unchanged PDFs skip reads", async () => {
@@ -508,7 +571,7 @@ test("TXT uses only Zotero-indexed characters and concurrent attachment renders 
 
 test("bootstrap loads scripts into a scope with Zotero globals and closes SQLite on shutdown", async () => {
   const h = harness();
-  h.prefs.set("similarworks.backgroundIndexing", false);
+  h.prefs.set("similar-works.backgroundIndexing", false);
   let closed = false;
   h.Zotero.DataDirectory = { dir: "/data" };
   h.Zotero.initializationPromise = Promise.resolve();
@@ -541,6 +604,12 @@ test("bootstrap loads scripts into a scope with Zotero globals and closes SQLite
     },
   };
   env.Services = {
+    prefs: {
+      prefHasUserValue: (name) =>
+        h.prefs.has(name.replace("extensions.zotero.", "")),
+      clearUserPref: (name) =>
+        h.prefs.delete(name.replace("extensions.zotero.", "")),
+    },
     scriptloader: {
       loadSubScript(uri, scope) {
         if (!vm.isContext(scope)) vm.createContext(scope);
@@ -557,6 +626,7 @@ test("bootstrap loads scripts into a scope with Zotero globals and closes SQLite
     context,
   );
   await context.startup({ id: "test", version: "0.2.0", rootURI: "" });
+  assert.deepEqual(h.errors, [], "Plugin startup must succeed");
   await context.SWScope.SWIndexer.corpus.ready;
   assert.equal(context.SWScope.SWIndexer.corpus.progress.phase, "ready");
   assert.equal(
@@ -577,9 +647,9 @@ test("Fluent section translations preserve native child controls in both locales
     );
     // Zotero translates the collapsible-section itself. A message value would
     // replace its children, so the header must translate only its label attribute.
-    assert.match(ftl, /^similarworks-header =\s*\n\s+\.label = .+$/m);
-    assert.match(ftl, /^similarworks-sidenav =\s*\n\s+\.tooltiptext = .+$/m);
-    assert.match(ftl, /^similarworks-refresh =\s*\n\s+\.tooltiptext = .+$/m);
+    assert.match(ftl, /^similar-works-header =\s*\n\s+\.label = .+$/m);
+    assert.match(ftl, /^similar-works-sidenav =\s*\n\s+\.tooltiptext = .+$/m);
+    assert.match(ftl, /^similar-works-refresh =\s*\n\s+\.tooltiptext = .+$/m);
   }
 });
 
@@ -642,4 +712,39 @@ test("online similarity reports completed candidate progress and obeys cancellat
     ).length,
     0,
   );
+});
+
+test("sparse candidate pruning preserves cosine scores and tracks replaced terms", async () => {
+  const h = harness();
+  await h.corpus.upsertDoc(
+    "1/A",
+    "a",
+    false,
+    new Map([
+      ["alpha", 2],
+      ["beta", 1],
+    ]),
+  );
+  await h.corpus.upsertDoc(
+    "1/B",
+    "b",
+    false,
+    new Map([
+      ["alpha", 1],
+      ["gamma", 3],
+    ]),
+  );
+  await h.corpus.upsertDoc("1/C", "c", false, new Map([["delta", 4]]));
+  const weight = (t, c) => (1 + Math.log(c)) * h.corpus.idf(t);
+  const expected =
+    (weight("alpha", 2) * weight("alpha", 1)) /
+    (Math.hypot(weight("alpha", 2), weight("beta", 1)) *
+      Math.hypot(weight("alpha", 1), weight("gamma", 3)));
+  const matches = h.corpus.scoreTopK("1/A", 10);
+  assert.equal(matches.length, 1);
+  assert.ok(Math.abs(matches[0].score - expected) < 1e-12);
+  await h.corpus.upsertDoc("1/B", "b2", false, new Map([["delta", 1]]));
+  assert.equal(h.corpus.scoreTopK("1/A", 10).length, 0);
+  await h.corpus.removeDoc("1/C");
+  assert.equal(h.corpus._postings.get("delta").size, 1);
 });

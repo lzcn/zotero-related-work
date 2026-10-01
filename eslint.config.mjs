@@ -36,7 +36,6 @@ export default [
           "clearTimeout",
           "pref",
           "module",
-          "SWMigration",
           "SWCorpus",
           "SWIndexer",
           "SWTokenizer",

@@ -1,9 +1,11 @@
-import { readFile, readdir, mkdir, writeFile } from "node:fs/promises";
+import { readFile, readdir, mkdir, writeFile, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { zipSync } from "fflate";
 import assert from "node:assert/strict";
 import { Script } from "node:vm";
+import { validatePackage } from "./validate-package.mjs";
+import { requiredFiles } from "./package-files.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const readJSON = async (name) =>
@@ -48,6 +50,8 @@ async function addDirectory(path) {
   const entries = await readdir(join(root, path), { withFileTypes: true });
   for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
     if (entry.name.startsWith(".")) continue;
+    if (path === "icons" && ["icon.png", "icon-256.png"].includes(entry.name))
+      continue;
     const child = `${path}/${entry.name}`;
     if (entry.isDirectory()) await addDirectory(child);
     else if (entry.isFile()) await add(child);
@@ -76,10 +80,13 @@ for (const locale of ["en-US", "zh-CN"]) {
   );
 }
 
-const output = join(root, "dist", `${pkg.config.addonRef}.xpi`);
+const output = join(root, "dist", `${pkg.name}.xpi`);
+const bytes = zipSync(files, {
+  level: 9,
+  mtime: new Date("2020-01-01T00:00:00Z"),
+});
+validatePackage(bytes, pkg, requiredFiles);
+await rm(dirname(output), { recursive: true, force: true });
 await mkdir(dirname(output), { recursive: true });
-await writeFile(
-  output,
-  zipSync(files, { level: 9, mtime: new Date("2020-01-01T00:00:00Z") }),
-);
-console.log("Built dist/similar-works.xpi");
+await writeFile(output, bytes);
+console.log(`Built dist/${pkg.name}.xpi`);

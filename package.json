@@ -7,34 +7,44 @@
   "author": "Zhi Lu",
   "repository": {
     "type": "git",
-    "url": "git+ssh://git@github.com/lzcn/zotero-similar-works.git"
+    "url": "git+https://github.com/lzcn/zotero-similar-works.git"
   },
   "engines": {
     "node": "^22.13.0 || >=24.0.0"
   },
   "scripts": {
-    "build": "node scripts/build.mjs",
+    "build": "npm run typecheck && node scripts/build.mjs",
     "lint": "npm run lint:check",
     "lint:check": "prettier --check . && eslint .",
     "lint:fix": "prettier --write . && eslint . --fix",
-    "test": "node tests/test.js && node --test tests/integration.test.js tests/migration.test.js",
+    "test": "node tests/unit.test.js && node --test tests/integration.test.js tests/lifecycle.test.js tests/package.test.mjs",
     "check": "npm run lint:check && npm test && npm run build",
-    "release": "npm run check && node scripts/package-release.mjs"
+    "release": "npm run check && node scripts/package-release.mjs",
+    "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
     "eslint": "10.11.0",
-    "fflate": "0.8.2",
-    "prettier": "3.5.3"
+    "fflate": "0.8.3",
+    "prettier": "3.5.3",
+    "typescript": "5.8.3",
+    "zotero-types": "3.1.9"
   },
   "config": {
     "addonName": "Similar Works",
     "addonID": "similar-works@lzcn",
-    "addonRef": "similar-works"
+    "addonRef": "similar-works",
+    "prefsPrefix": "extensions.zotero.similar-works"
   },
   "prettier": {
     "printWidth": 80,
     "tabWidth": 2,
     "endOfLine": "lf"
+  },
+  "overrides": {
+    "epubjs": {
+      ".": "0.3.93",
+      "@xmldom/xmldom": "0.9.12"
+    }
   }
 }

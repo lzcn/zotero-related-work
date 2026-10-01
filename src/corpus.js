@@ -1,5 +1,6 @@
 var SW_SCHEMA_VERSION = 1;
 
+/** @param {number} ms @returns {Promise<void>} */
 function swYield(ms) {
   if (typeof Zotero !== "undefined" && Zotero.Promise && Zotero.Promise.delay) {
     return Zotero.Promise.delay(ms || 0);
@@ -11,11 +12,13 @@ var SWCorpus = class {
   constructor() {
     this.docs = new Map();
     this.df = new Map();
+    this._postings = new Map();
     this.n = 0;
     this.dfVersion = 0;
     this.revision = 0;
     this.lastChangedAt = 0;
     this._sourceStates = new Map();
+    this._recommendations = new Map();
     this._norms = new Map();
     this._normsVersion = -1;
     this._db = null;
@@ -46,8 +49,7 @@ var SWCorpus = class {
       await this._loadAll();
     } catch (e) {
       Zotero.logError(
-        "[similar-works] corpus init failed: " +
-          (e && e.message ? e.message : e),
+        new Error("[similar-works] corpus init failed: " + String(e)),
       );
       this.progress = {
         phase: "error",
@@ -71,22 +73,15 @@ var SWCorpus = class {
     await this._db.execute(
       "CREATE TABLE IF NOT EXISTS source_updates (key TEXT PRIMARY KEY, itemModifiedAt TEXT NOT NULL, sourceHash TEXT NOT NULL, checkedAt INTEGER NOT NULL)",
     );
+    await this._db.execute(
+      "CREATE TABLE IF NOT EXISTS recommendations (cacheKey TEXT PRIMARY KEY, payload TEXT NOT NULL, computedAt INTEGER NOT NULL)",
+    );
     var revisions = await this._db.execute(
       "SELECT v FROM meta WHERE k = 'corpusRevision'",
     );
     this.revision = revisions.length
       ? Number(revisions[0].getResultByName("v"))
       : 0;
-    var rows = await this._db.execute(
-      "SELECT v FROM meta WHERE k = 'schemaVersion'",
-    );
-    var version = rows.length ? parseInt(rows[0].getResultByName("v")) : 0;
-    if (version !== SW_SCHEMA_VERSION) {
-      await this._db.execute("DROP TABLE IF EXISTS docs");
-      await this._db.execute(
-        "CREATE TABLE docs (key TEXT PRIMARY KEY, hash TEXT NOT NULL, weak INTEGER NOT NULL DEFAULT 0, tf TEXT NOT NULL)",
-      );
-    }
     await this._db.execute(
       "INSERT OR REPLACE INTO meta (k, v) VALUES ('schemaVersion', '" +
         SW_SCHEMA_VERSION +
@@ -138,6 +133,9 @@ var SWCorpus = class {
     this.n++;
     for (var t of doc.tf.keys()) {
       this.df.set(t, (this.df.get(t) || 0) + 1);
+      var posting = new Set(this._postings.get(t));
+      posting.add(key);
+      this._postings.set(t, posting);
     }
     if (bump) {
       this.dfVersion++;
@@ -153,6 +151,10 @@ var SWCorpus = class {
     this._norms.delete(key);
     this.n--;
     for (var t of doc.tf.keys()) {
+      var posting = new Set(this._postings.get(t));
+      posting.delete(key);
+      if (posting.size) this._postings.set(t, posting);
+      else this._postings.delete(t);
       var c = this.df.get(t) || 0;
       if (c <= 1) {
         this.df.delete(t);
@@ -188,7 +190,7 @@ var SWCorpus = class {
           false,
         );
       } catch (e) {
-        Zotero.logError("[similar-works] persist doc failed: " + e);
+        Zotero.logError(new Error("[similar-works] persist doc failed: " + e));
       }
     }
     return true;
@@ -253,6 +255,93 @@ var SWCorpus = class {
     this._sourceStates.set(key, state);
   }
 
+  async getRecommendations(queryKey, includeWeak) {
+    var cacheKey = JSON.stringify([queryKey, includeWeak]);
+    var cached = this._recommendations.get(cacheKey);
+    if (!cached && this._db) {
+      try {
+        var rows = await this._db.execute(
+          "SELECT payload FROM recommendations WHERE cacheKey = ?",
+          [cacheKey],
+        );
+        if (rows.length)
+          cached = JSON.parse(rows[0].getResultByName("payload"));
+      } catch (e) {
+        Zotero.logError(e);
+      }
+    }
+    if (
+      !cached ||
+      cached.algorithm !== 1 ||
+      !Array.isArray(cached.matches) ||
+      !Number.isFinite(cached.computedAt) ||
+      !Number.isFinite(cached.revision) ||
+      cached.matches.some(
+        (m) =>
+          typeof m.key !== "string" ||
+          !Number.isFinite(m.score) ||
+          m.score < 0 ||
+          m.score > 1,
+      )
+    )
+      return null;
+    this._recommendations.delete(cacheKey);
+    this._recommendations.set(cacheKey, cached);
+    while (this._recommendations.size > 200)
+      this._recommendations.delete(this._recommendations.keys().next().value);
+    return cached;
+  }
+
+  recommendationsFresh(cached, queryKey) {
+    return (
+      cached &&
+      cached.revision === this.revision &&
+      cached.queryHash === this.docs.get(queryKey)?.hash &&
+      Date.now() - cached.computedAt < 24 * 60 * 60 * 1000
+    );
+  }
+
+  async saveRecommendations(
+    queryKey,
+    includeWeak,
+    matches,
+    revision,
+    queryHash,
+  ) {
+    // A yielded computation must never be tagged with a newer index revision.
+    if (
+      revision !== this.revision ||
+      queryHash !== this.docs.get(queryKey)?.hash
+    )
+      return;
+    var cacheKey = JSON.stringify([queryKey, includeWeak]);
+    var cached = {
+      algorithm: 1,
+      revision,
+      queryHash,
+      computedAt: Date.now(),
+      matches: matches.slice(0, 100),
+    };
+    this._recommendations.set(cacheKey, cached);
+    while (this._recommendations.size > 200)
+      this._recommendations.delete(this._recommendations.keys().next().value);
+    if (this._db) {
+      try {
+        await this._db.executeTransaction(async () => {
+          await this._db.execute(
+            "INSERT OR REPLACE INTO recommendations (cacheKey, payload, computedAt) VALUES (?, ?, ?)",
+            [cacheKey, JSON.stringify(cached), cached.computedAt],
+          );
+          await this._db.execute(
+            "DELETE FROM recommendations WHERE cacheKey NOT IN (SELECT cacheKey FROM recommendations ORDER BY computedAt DESC, cacheKey LIMIT 1000)",
+          );
+        });
+      } catch (e) {
+        Zotero.logError(e);
+      }
+    }
+  }
+
   idf(term) {
     if (!this.n) {
       return 1;
@@ -287,11 +376,23 @@ var SWCorpus = class {
     if (!qn) {
       return [];
     }
+    var candidates = new Set();
+    var queryWeights = new Map();
+    for (var [term, count] of q.tf) {
+      queryWeights.set(term, (1 + Math.log(count)) * this.idf(term));
+      for (var candidateKey of this._postings.get(term) || [])
+        candidates.add(candidateKey);
+    }
     for (var [key, d] of this.docs) {
       if (key === queryKey) {
         continue;
       }
       if (filter && !filter(key, d)) {
+        continue;
+      }
+      // No shared terms means an exact zero score; avoid scanning either vector.
+      if (!candidates.has(key)) {
+        yield null;
         continue;
       }
       var small;
@@ -307,8 +408,9 @@ var SWCorpus = class {
       for (var [t, c] of small) {
         var c2 = large.get(t);
         if (c2) {
-          var w1 = (1 + Math.log(c)) * this.idf(t);
-          var w2 = (1 + Math.log(c2)) * this.idf(t);
+          var w1 = queryWeights.get(t);
+          var documentCount = small === q.tf ? c2 : c;
+          var w2 = (1 + Math.log(documentCount)) * this.idf(t);
           dot += w1 * w2;
         }
       }
@@ -345,7 +447,7 @@ var SWCorpus = class {
     k,
     filter,
     cancelled = () => false,
-    onProgress = () => {},
+    onProgress = (_progress) => {},
     restMs = 20,
   ) {
     k = Math.floor(Number(k));
@@ -355,6 +457,7 @@ var SWCorpus = class {
     var snapshot = Object.create(this);
     snapshot.docs = new Map(this.docs);
     snapshot.df = new Map(this.df);
+    snapshot._postings = new Map(this._postings);
     snapshot.n = this.n;
     snapshot.dfVersion = this.dfVersion;
     snapshot._normsVersion = this._normsVersion;

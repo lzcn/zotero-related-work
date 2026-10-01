@@ -10,52 +10,75 @@ var SWScope = {
   SWPlugin: { id: null, version: null, rootURI: null },
 };
 
-async function startup({ id, version, rootURI }, reason) {
+var SWReady = false;
+var SWGeneration = 0;
+var SWStartupPromise = null;
+var SWShutdownPromise = null;
+
+async function startup(data) {
+  if (SWStartupPromise) return SWStartupPromise;
+  var token = ++SWGeneration;
+  SWStartupPromise = start(data, token);
+  return SWStartupPromise;
+}
+
+async function start({ id, version, rootURI }, token) {
   try {
-    SWScope.SWPlugin.id = id;
-    SWScope.SWPlugin.version = version;
-    SWScope.SWPlugin.rootURI = rootURI;
-    var loader = Services.scriptloader;
+    SWScope.SWPlugin = { id, version, rootURI };
     var files = [
-      "migration.js",
       "stemmer.js",
       "tokenizer.js",
       "corpus.js",
       "indexer.js",
       "section.js",
     ];
-    for (var f of files) {
-      loader.loadSubScript(rootURI + "src/" + f, SWScope);
-    }
+    for (var file of files)
+      Services.scriptloader.loadSubScript(rootURI + "src/" + file, SWScope);
     await Zotero.initializationPromise;
-    await SWScope.SWMigration.prepare();
+    if (token !== SWGeneration) return;
     await SWScope.SWIndexer.start();
-    for (var win of Zotero.getMainWindows()) {
-      SWScope.SWSection.injectWindow(win);
+    await SWScope.SWIndexer.corpus.ready;
+    if (token !== SWGeneration) return;
+    if (SWScope.SWIndexer.corpus.progress.phase === "error") {
+      throw new Error(SWScope.SWIndexer.corpus.progress.error);
     }
     SWScope.SWSection.register(rootURI);
-  } catch (e) {
-    Zotero.logError("[similar-works] startup failed: " + e);
+    SWReady = true;
+    for (var win of Zotero.getMainWindows())
+      SWScope.SWSection.injectWindow(win);
+  } catch (error) {
+    SWReady = false;
+    Zotero.logError(new Error("[similar-works] startup failed: " + error));
+    await releaseResources();
   }
 }
 
+async function releaseResources() {
+  if (SWScope.SWSection) SWScope.SWSection.shutdown();
+  if (SWScope.SWIndexer) await SWScope.SWIndexer.shutdown();
+  if (SWScope.SWIndexer?.corpus) await SWScope.SWIndexer.corpus.close();
+}
+
 async function shutdown() {
-  try {
-    if (SWScope.SWSection) SWScope.SWSection.shutdown();
-    if (SWScope.SWIndexer) {
-      await SWScope.SWIndexer.shutdown();
-      if (SWScope.SWIndexer.corpus) await SWScope.SWIndexer.corpus.close();
+  if (SWShutdownPromise) return SWShutdownPromise;
+  SWShutdownPromise = (async () => {
+    SWReady = false;
+    ++SWGeneration;
+    await SWStartupPromise;
+    try {
+      await releaseResources();
+    } catch (error) {
+      Zotero.logError(error);
     }
-  } catch (e) {
-    Zotero.logError(e);
-  }
+  })();
+  return SWShutdownPromise;
 }
 
 function onMainWindowLoad({ window }) {
   try {
-    SWScope.SWSection.injectWindow(window);
+    if (SWReady) SWScope.SWSection.injectWindow(window);
   } catch (e) {
-    Zotero.logError("[similar-works] onMainWindowLoad failed: " + e);
+    Zotero.logError(new Error("[similar-works] onMainWindowLoad failed: " + e));
   }
 }
 

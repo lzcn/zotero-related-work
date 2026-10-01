@@ -1,6 +1,10 @@
+node_modules/
+dist/
+build/
+release/
+logs/
+.scaffold/
+.env
 .DS_Store
 *.xpi
 .local-backups/
-node_modules/
-dist/
-release/

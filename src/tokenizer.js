@@ -225,6 +225,7 @@ function swIsStopChar(ch) {
   return SW_ZH_STOPCHARS.has(ch) || SW_JA_STOPCHARS.has(ch);
 }
 
+/** @param {string} text @param {{ minLength?: number }} [opts] @returns {string[]} */
 function swTokenizeText(text, opts) {
   var minLength = (opts && opts.minLength) || 2;
   var tokens = [];
@@ -267,6 +268,7 @@ function swTokenizeText(text, opts) {
   return tokens;
 }
 
+/** @param {string} word @param {number} minLength @param {string[]} tokens */
 function swTokenizeLatin(word, minLength, tokens) {
   if (/^[0-9]+$/.test(word)) {
     return;
@@ -284,6 +286,7 @@ function swTokenizeLatin(word, minLength, tokens) {
   }
 }
 
+/** @param {string} text @param {{ minLength?: number }} [opts] @returns {Map<string, number>} */
 function swTermFreq(text, opts) {
   var tf = new Map();
   var tokens = swTokenizeText(text, opts);
@@ -294,6 +297,7 @@ function swTermFreq(text, opts) {
   return tf;
 }
 
+/** @param {string} str @returns {string} */
 function swFnv1a(str) {
   var h = 0x811c9dc5;
   for (var i = 0; i < str.length; i++) {

@@ -48,12 +48,12 @@ var SWSection = {
       pluginID: SWPlugin.id,
       paneID: "similar-works-similar",
       header: {
-        l10nID: "similarworks-header",
-        icon: rootURI + "icons/similar-works-16.svg",
+        l10nID: "similar-works-header",
+        icon: rootURI + "icons/icon-16.svg",
       },
       sidenav: {
-        l10nID: "similarworks-sidenav",
-        icon: rootURI + "icons/similar-works-20.svg",
+        l10nID: "similar-works-sidenav",
+        icon: rootURI + "icons/icon-20.svg",
       },
       onDestroy: ({ body }) => {
         body._swToken = (body._swToken || 0) + 1;
@@ -85,7 +85,7 @@ var SWSection = {
         {
           type: "refresh",
           icon: "chrome://zotero/skin/16/universal/refresh.svg",
-          l10nID: "similarworks-refresh",
+          l10nID: "similar-works-refresh",
           onClick: (props) => self.renderBody(props, true),
         },
       ],
@@ -146,28 +146,42 @@ var SWSection = {
   },
 
   async renderBody(props, compute = false) {
+    var body = props.body;
+    var key = props.item && SWIndexer.docKey(props.item);
+    if (!compute && body?._swWork && body._swWorkKey === key) return;
     var token;
-    try {
-      var work = this._renderBody(props, compute);
-      token = props.body?._swToken;
-      await work;
-    } catch (e) {
-      Zotero.logError(e);
-      if (!this._stopped && props.body && props.body._swToken === token)
-        this.setStatus(props.body, String(e.message || e));
-    } finally {
-      if (compute) {
-        if (props.body && props.body._swToken === token) {
-          props.body.setAttribute("aria-busy", "false");
-          var progress = props.body.querySelector(".sw-computation-progress");
+    var work = (async () => {
+      try {
+        var pending = this._renderBody(props, compute);
+        token = body?._swToken;
+        await pending;
+      } catch (e) {
+        Zotero.logError(e);
+        if (!this._stopped && body && body._swToken === token) {
+          // Preserve usable cached rows if revalidation fails.
+          this.setStatus(body, String(e.message || e), false);
+        }
+      } finally {
+        if (body && body._swToken === token) {
+          body.setAttribute("aria-busy", "false");
+          var progress = body.querySelector(".sw-computation-progress");
           if (progress) progress.hidden = true;
         }
       }
+    })();
+    if (body) {
+      body._swWork = work;
+      body._swWorkKey = key;
+    }
+    try {
+      await work;
+    } finally {
+      if (body?._swWork === work) body._swWork = null;
     }
   },
 
   async _renderBody(props, compute) {
-    var { body, item, setSectionSummary, tabType } = props;
+    var { body, item, setSectionSummary } = props;
     if (this._stopped || !body || !item) {
       return;
     }
@@ -208,7 +222,7 @@ var SWSection = {
       progressBar.removeAttribute("value");
       var computingText = await this.fmt(
         doc,
-        "similarworks-computing",
+        "similar-works-computing",
         null,
         "Computing similarity…",
       );
@@ -220,13 +234,13 @@ var SWSection = {
     if (!corpus) {
       if (compute)
         await show(
-          "similarworks-unavailable",
+          "similar-works-unavailable",
           null,
           "Similarity index unavailable",
         );
       return;
     }
-    if (compute && corpus.progress.phase !== "ready") {
+    if (corpus.progress.phase !== "ready") {
       await corpus.ready;
       if (body._swToken !== token || this._stopped) return;
     }
@@ -235,7 +249,7 @@ var SWSection = {
         ? " (" + corpus.progress.error + ")"
         : "";
       await show(
-        "similarworks-unavailable",
+        "similar-works-unavailable",
         null,
         "Index unavailable",
         errDetail,
@@ -244,39 +258,71 @@ var SWSection = {
     }
     if (corpus.progress.phase !== "ready") return;
 
-    if (!compute) return;
-
-    var target = await SWIndexer.ensureNow(item);
+    var target = await SWIndexer.resolveDocItem(item);
+    if (!target || body._swToken !== token || this._stopped) return;
+    var docKey = SWIndexer.docKey(target);
+    var includeWeak = SWPref("allowMetadataOnlyRecommendations", true);
+    var cached = compute
+      ? null
+      : await corpus.getRecommendations(docKey, includeWeak);
+    if (body._swToken !== token || this._stopped) return;
+    if (cached)
+      await this._presentMatches(
+        props,
+        cached.matches,
+        docKey,
+        token,
+        "similar-works-cached",
+        "Cached results",
+      );
+    if (body._swToken !== token || this._stopped) return;
+    // Avoid spending CPU on items the user only passes while browsing.
+    if (!compute) await swYield(120);
+    if (body._swToken !== token || this._stopped || sectionEl?.open === false)
+      return;
+    await SWIndexer.ensureNow(item);
     if (body._swToken !== token) {
       return;
     }
     if (!target) {
       await show(
-        "similarworks-no-text",
+        "similar-works-no-text",
         null,
         "No analyzable full text or abstract for this item",
       );
       return;
     }
-    var docKey = SWIndexer.docKey(target);
     if (!corpus.docs.has(docKey)) {
       await show(
-        "similarworks-no-text",
+        "similar-works-no-text",
         null,
         "No analyzable full text or abstract for this item",
       );
       return;
     }
 
-    var k = SWResultLimit(SWPref("recommendationCount", 10));
+    if (!compute && corpus.recommendationsFresh(cached, docKey)) return;
+    progressBar = body.querySelector(".sw-computation-progress");
+    computingText = await this.fmt(
+      doc,
+      cached ? "similar-works-updating" : "similar-works-computing",
+      null,
+      cached ? "Updating…" : "Computing similarity…",
+    );
+    if (body._swToken !== token || this._stopped) return;
+    this.setStatus(body, computingText, false);
+    body.setAttribute("aria-busy", "true");
+    progressBar.hidden = !!cached && !compute;
+    var revision = corpus.revision;
+    var queryHash = corpus.docs.get(docKey).hash;
     var lastProgress = 0;
-    var includeWeak = SWPref("allowMetadataOnlyRecommendations", true);
     var matches = await corpus.scoreTopKAsync(
       docKey,
       100,
       (key, d) =>
         key.startsWith(target.libraryID + "/") && (includeWeak || !d.weak),
-      () => this._stopped || body._swToken !== token,
+      () =>
+        this._stopped || body._swToken !== token || sectionEl?.open === false,
       ({ done, total }) => {
         if (this._stopped || body._swToken !== token) return;
         if (done < total && Date.now() - lastProgress < 100) return;
@@ -293,6 +339,30 @@ var SWSection = {
       return;
     }
 
+    if (this._stopped || sectionEl?.open === false) return;
+    await corpus.saveRecommendations(
+      docKey,
+      includeWeak,
+      matches,
+      revision,
+      queryHash,
+    );
+    if (body._swToken !== token || this._stopped) return;
+    await this._presentMatches(props, matches, docKey, token);
+  },
+
+  async _presentMatches(
+    props,
+    matches,
+    docKey,
+    token,
+    statusID = "similar-works-updated",
+    fallback = "Updated",
+  ) {
+    var { body, setSectionSummary, tabType } = props;
+    var doc = body.ownerDocument;
+    var corpus = SWIndexer.corpus;
+    var k = SWResultLimit(SWPref("recommendationCount", 10));
     var rows = await this._resolveRows(matches, k);
     if (body._swToken !== token) {
       return;
@@ -300,11 +370,14 @@ var SWSection = {
 
     var list = body.querySelector(".sw-list");
     if (!rows.length) {
-      await show(
-        "similarworks-empty",
+      var emptyText = await this.fmt(
+        doc,
+        "similar-works-empty",
         null,
         "No similar items found in this library",
       );
+      if (body._swToken !== token || this._stopped) return;
+      this.setStatus(body, emptyText);
       if (body._swToken !== token) return;
       if (setSectionSummary) {
         setSectionSummary("");
@@ -314,14 +387,14 @@ var SWSection = {
     var top = rows[0].score;
     var weakFlag = await this.fmt(
       doc,
-      "similarworks-based-on-weak",
+      "similar-works-based-on-weak",
       null,
       "metadata only",
     );
 
-    var queryWeak = corpus.docs.get(docKey).weak;
+    var queryWeak = corpus.docs.get(docKey)?.weak;
     if (this._stopped || body._swToken !== token) return;
-    var updated = await this.fmt(doc, "similarworks-updated", null, "Updated");
+    var updated = await this.fmt(doc, statusID, null, fallback);
     if (this._stopped || body._swToken !== token) return;
     this.setStatus(body, updated + (queryWeak ? " · " + weakFlag : ""), false);
     var signature = JSON.stringify(
@@ -424,13 +497,7 @@ var SWSection = {
           m.key.substring(idx + 1),
         );
       } catch (e) {}
-      if (
-        !it ||
-        it === true ||
-        it.deleted ||
-        it.isFeedItem ||
-        it.parentItemID
-      ) {
+      if (!it || it.deleted || it.isFeedItem || it.parentItemID) {
         continue;
       }
       out.push({ item: it, score: m.score, weak: m.weak });
