@@ -28,7 +28,7 @@ Zotero → Tools → Plugins → Tools for all plugins → Install Plugin From F
 
 `<Zotero 数据目录>/fulltext.sqlite` 是 Zotero 自身的全文检索数据库，不是本插件创建的文件，必须保留原名。插件读取 Zotero 提取的全文缓存，自建词频向量存于 `similar-works/similarity.sqlite`。
 
-需要 Zotero 7–10；当前验收环境为 Zotero 10.0.5。发布前需配置真实更新源，manifest 没有占位更新 URL。
+需要 Zotero 7–10；当前验收环境为 Zotero 10.0.5。Zotero 10 安装校验要求 `applications.zotero.update_url`，manifest 保留 `https://zhi.dev/similar-works/updates.json`。该端点尚未部署；公开发布前必须部署真实更新清单，当前不能保证自动更新。
 
 内部 `recommendationCount = 10`、`allowMetadataOnlyRecommendations = true`，均不提供设置界面。扫描版或缺失全文的文献会回退到元数据。零词项重叠时不推荐；可用候选不足时显示少于 10 篇。
 

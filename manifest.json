@@ -8,7 +8,8 @@
 		"zotero": {
 			"id": "similar-works@zhi.dev",
 			"strict_min_version": "7.0",
-			"strict_max_version": "10.*"
+			"strict_max_version": "10.*",
+			"update_url": "https://zhi.dev/similar-works/updates.json"
 		}
 	}
 }

@@ -10,3 +10,5 @@
 - 原插件包、数据目录、prefs.js 和 extensions.json 的回退副本保存在本地 `.local-backups/20261002-012746/`，不提交到 Git。
 
 本次按用户要求不启动 Zotero，不运行测试。后续需要验收首次加载、复用旧向量、点击刷新进度与推荐结果。本记录不代表运行验收通过。
+
+安装修正：本机 Zotero 10.0.5 要求 manifest 的 applications.zotero.update_url 必填；已补齐 Similar Works 更新地址并重新打包。更新服务尚未部署，修正后的安装包尚未做实际安装验收。
