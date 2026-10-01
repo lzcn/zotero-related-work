@@ -1,6 +1,6 @@
 function SWPref(name, fallback) {
 	try {
-		var v = Zotero.Prefs.get("relatedwork." + name);
+		var v = Zotero.Prefs.get("similarworks." + name);
 		return v === undefined || v === null ? fallback : v;
 	}
 	catch (e) {

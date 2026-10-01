@@ -45,7 +45,7 @@ var SWCorpus = class {
 	async _openAndLoad() {
 		try {
 			var dataDir = Zotero.DataDirectory.dir;
-			var dir = PathUtils.join(dataDir, "related-work");
+			var dir = PathUtils.join(dataDir, "similar-works");
 			await IOUtils.makeDirectory(dir, { ignoreExisting: true });
 			this._dbPath = PathUtils.join(dir, "similarity.sqlite");
 			var { Sqlite } = ChromeUtils.importESModule("resource://gre/modules/Sqlite.sys.mjs");

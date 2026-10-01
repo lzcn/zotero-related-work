@@ -30,7 +30,7 @@ class Element {
 }
 
 function harness() {
-	const items = new Map(), prefs = new Map([['relatedwork.minFulltextTerms', 1]]);
+	const items = new Map(), prefs = new Map([['similarworks.minFulltextTerms', 1]]);
 	const files = new Map(), queued = [], errors = [], selected = [];
 	const doc = { createElementNS(ns, tag) { assert.equal(ns, "http://www.w3.org/1999/xhtml"); return new Element(tag, doc); },
 		l10n: { async formatValue() { return ''; } },
@@ -97,7 +97,7 @@ test('permanent deletion uses notifier identity; startup prunes stale and child 
 	await h.SWIndexer._removeById(99, { libraryID: 1, key: 'GONE' });
 	assert.equal(h.corpus.n, 0);
 	await h.corpus.upsertDoc('1/STALE', 'x', false, new Map([['machine', 1]]));
-	h.prefs.set('relatedwork.backgroundIndexing', false);
+	h.prefs.set('similarworks.backgroundIndexing', false);
 	await h.SWIndexer.enqueueLibrary();
 	assert.equal(h.corpus.n, 0);
 });
@@ -107,7 +107,7 @@ test('sidebar ranks top K in same library, preserves rows during indexing, and n
 	const query = h.item(1, 'neural machine learning'), a = h.item(2, 'neural machine learning'),
 		b = h.item(3, 'machine learning algorithm'), other = h.item(4, 'neural machine learning', null, 2);
 	for (const it of [query, a, b, other]) await h.SWIndexer.processItem(it);
-	h.prefs.set('relatedwork.recommendationCount', 2);
+	h.prefs.set('similarworks.recommendationCount', 2);
 	h.SWIndexer._draining = true;
 	let summary;
 	const props = { body: h.body, item: query, tabType: 'library', setSectionSummary: s => summary = s };
@@ -124,10 +124,10 @@ test('sidebar ranks top K in same library, preserves rows during indexing, and n
 	assert.equal(h.SWSection._active.length, 1, 'refresh does not duplicate bodies');
 	assert.equal(h.body.querySelector('input[type=number]'), null);
 	assert.equal(h.body.querySelector('input[type=checkbox]'), null);
-	h.prefs.set('relatedwork.recommendationCount', 1);
+	h.prefs.set('similarworks.recommendationCount', 1);
 	await h.SWSection.renderBody(props, true);
 	assert.equal(h.body.querySelectorAll('.sw-row').length, 1);
-	h.prefs.set('relatedwork.allowMetadataOnlyRecommendations', false);
+	h.prefs.set('similarworks.allowMetadataOnlyRecommendations', false);
 	await h.SWSection.renderBody(props, true);
 	assert.equal(h.body.querySelectorAll('.sw-row').length, 0);
 	assert.equal(h.errors.length, 0);
@@ -287,7 +287,7 @@ test('TXT uses only Zotero-indexed characters and concurrent attachment renders 
 
 test('bootstrap loads scripts into a scope with Zotero globals and closes SQLite on shutdown', async () => {
 	const h = harness();
-	h.prefs.set('relatedwork.backgroundIndexing', false);
+	h.prefs.set('similarworks.backgroundIndexing', false);
 	let closed = false;
 	h.Zotero.DataDirectory = { dir: '/data' };
 	h.Zotero.initializationPromise = Promise.resolve();

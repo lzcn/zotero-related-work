@@ -9,11 +9,12 @@ async function startup({ id, version, rootURI }, reason) {
 		SWScope.SWPlugin.version = version;
 		SWScope.SWPlugin.rootURI = rootURI;
 		var loader = Services.scriptloader;
-		var files = ["stemmer.js", "tokenizer.js", "corpus.js", "indexer.js", "section.js"];
+		var files = ["migration.js", "stemmer.js", "tokenizer.js", "corpus.js", "indexer.js", "section.js"];
 		for (var f of files) {
 			loader.loadSubScript(rootURI + "src/" + f, SWScope);
 		}
 		await Zotero.initializationPromise;
+		await SWScope.SWMigration.prepare();
 		await SWScope.SWIndexer.start();
 		for (var win of Zotero.getMainWindows()) {
 			SWScope.SWSection.injectWindow(win);
