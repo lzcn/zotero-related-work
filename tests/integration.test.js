@@ -213,7 +213,8 @@ test('cooperative tokenization keeps word and CJK boundaries; unchanged PDFs ski
 	const batched = await h.SWIndexer.termFreqInBackground(text);
 	const direct = h.SWTokenizer.termFreq(text, { minLength: 2 });
 	assert.deepEqual([...batched], [...direct]);
-	const q = h.item(1, 'machine learning'), att = h.item(2, 'PDF', 1);
+	const q = h.item(1, 'machine learning');
+	h.item(2, 'PDF', 1);
 	h.files.set('/cache/KEY2', text);
 	let reads = 0; const read = h.context.IOUtils.read;
 	h.context.IOUtils.read = (...args) => { reads++; return read(...args); };

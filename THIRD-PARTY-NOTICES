@@ -1,0 +1,12 @@
+Porter JavaScript stemmer (src/stemmer.js)
+
+Adapted from the implementation by Andargor (July 2004), substantially
+revised by Christopher McKenzie (August 2009).
+Source: https://tartarus.org/martin/PorterStemmer/js.txt
+Permission: https://tartarus.org/martin/PorterStemmer/
+The author's distribution page permits these implementations to be used
+free of charge for any purpose. This permission remains applicable to the
+upstream implementation; the project's AGPL license does not replace it.
+
+Build tools are development dependencies and are not bundled in the add-on.
+Their respective license notices are included in their npm packages.

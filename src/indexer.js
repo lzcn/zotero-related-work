@@ -66,7 +66,7 @@ var SWIndexer = {
 			return;
 		}
 		if (event === "trash" || event === "delete") {
-			for (var id of ids) {
+			for (const id of ids) {
 				var work = this._removeById(id, extraData[id]).catch(e => Zotero.logError(e));
 				this._pendingRemovals.add(work);
 				work.then(() => this._pendingRemovals.delete(work));
@@ -74,7 +74,7 @@ var SWIndexer = {
 			return;
 		}
 		if (event === "add" || event === "modify" || event === "index" || event === "refresh") {
-			for (var id of ids) {
+			for (const id of ids) {
 				this.enqueue(id);
 			}
 		}
@@ -133,7 +133,7 @@ var SWIndexer = {
 			var scanned = 0;
 			for (var lib of Zotero.Libraries.getAll()) {
 				var ids = await Zotero.Items.getAll(lib.id, true, false, true);
-				for (var id of ids) {
+				for (const id of ids) {
 					if (this._stopped) return;
 					if (++scanned % 25 === 0) await swYield(20);
 					var item = await Zotero.Items.getAsync(id);

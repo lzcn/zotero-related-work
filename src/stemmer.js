@@ -1,3 +1,5 @@
+// Adapted from the Porter JavaScript stemmer by Andargor (2004)
+// and Christopher McKenzie (2009). See THIRD-PARTY-NOTICES.
 var step2list = {
 	"ational": "ate", "tional": "tion", "enci": "ence", "anci": "ance",
 	"izer": "ize", "bli": "ble", "alli": "al", "entli": "ent", "eli": "e",

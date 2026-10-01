@@ -2,16 +2,24 @@
 
 ![AI Assisted · ChatGPT](.github/badges/ai-assisted-chatgpt.svg) ![AI Assisted · DeepSeek](.github/badges/ai-assisted-deepseek.svg)
 
-在 Zotero 右侧栏推荐同一文献库中相似的前 10 篇文献。点击刷新计算相似度，点击结果打开对应条目。复用 Zotero 全文缓存，所有计算在本地完成。
+[中文](README.zh-CN.md)
 
-## 安装
+Find up to 10 similar papers in your Zotero library. Click refresh to update the list, then click a result to open the item. Uses Zotero's full-text cache. All processing stays on your computer.
 
-需要 Zotero 7–10。目前仅公开源码，请自行构建：
+## Build and install
+
+Requires Node.js 22.13+ (22.x) or 24+ and Zotero 7–10. Only source code is published for now.
 
 ```sh
-./build.sh
+npm ci             # Install dependencies
+npm run check      # Run tests, build, and check code
+npm run release    # Create the local install package
 ```
 
-在 Zotero 的插件管理页面选择 **Install Plugin From File**，打开生成的 `similar-works.xpi`。
+In Zotero's Plugins Manager, choose **Install Plugin From File** and open `dist/similar-works.xpi`.
 
-从旧开发版升级时，请先停用旧插件并重启 Zotero；已有数据会自动迁移。
+When upgrading from an older development version, disable the old plugin and restart Zotero first. Existing data will be moved automatically.
+
+## License
+
+Copyright © 2026 Zhi Lu. [AGPL-3.0-or-later](LICENSE).

@@ -1,0 +1,27 @@
+{
+  "name": "zotero-similar-works",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Find similar papers in your Zotero library.",
+  "license": "AGPL-3.0-or-later",
+  "author": "Zhi Lu",
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com/lzcn/zotero-similar-works.git"
+  },
+  "engines": {
+    "node": "^22.13.0 || >=24.0.0"
+  },
+  "scripts": {
+    "test": "node tests/test.js && node --test tests/integration.test.js tests/migration.test.js",
+    "lint": "eslint .",
+    "build": "node scripts/build.mjs",
+    "check": "npm run lint && npm test && npm run build",
+    "release": "npm run build"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "eslint": "10.11.0",
+    "fflate": "0.8.2"
+  }
+}
