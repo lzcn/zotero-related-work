@@ -3,3 +3,4 @@
 .local-backups/
 node_modules/
 dist/
+release/

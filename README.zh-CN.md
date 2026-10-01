@@ -1,6 +1,6 @@
 # Similar Works
 
-![AI Assisted · ChatGPT](.github/badges/ai-assisted-chatgpt.svg) ![AI Assisted · DeepSeek](.github/badges/ai-assisted-deepseek.svg)
+[![Built with ChatGPT](https://img.shields.io/badge/Built_with-ChatGPT-10A37F?style=flat)](https://chatgpt.com/) [![Built with DeepSeek](https://img.shields.io/badge/Built_with-DeepSeek-4D6BFE?style=flat)](https://www.deepseek.com/)
 
 [English](README.md)
 
@@ -13,10 +13,10 @@
 ```sh
 npm ci             # 安装依赖
 npm run check      # 测试、构建和代码检查
-npm run release    # 生成本地安装包
+npm run release    # 检查并生成本地版本包
 ```
 
-在 Zotero 插件管理页面选择 **Install Plugin From File**，打开 `dist/similar-works.xpi`。
+在 Zotero 插件管理页面选择 **Install Plugin From File**，打开 `release/v0.1.0/similar-works-0.1.0.xpi`。
 
 从旧开发版升级时，先停用旧插件并重启 Zotero；已有数据会自动迁移。
 

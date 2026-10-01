@@ -13,15 +13,28 @@
     "node": "^22.13.0 || >=24.0.0"
   },
   "scripts": {
-    "test": "node tests/test.js && node --test tests/integration.test.js tests/migration.test.js",
-    "lint": "eslint .",
     "build": "node scripts/build.mjs",
-    "check": "npm run lint && npm test && npm run build",
-    "release": "npm run build"
+    "lint": "npm run lint:check",
+    "lint:check": "prettier --check . && eslint .",
+    "lint:fix": "prettier --write . && eslint . --fix",
+    "test": "node tests/test.js && node --test tests/integration.test.js tests/migration.test.js",
+    "check": "npm run lint:check && npm test && npm run build",
+    "release": "npm run check && node scripts/package-release.mjs"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
     "eslint": "10.11.0",
-    "fflate": "0.8.2"
+    "fflate": "0.8.2",
+    "prettier": "3.5.3"
+  },
+  "config": {
+    "addonName": "Similar Works",
+    "addonID": "similar-works@lzcn",
+    "addonRef": "similar-works"
+  },
+  "prettier": {
+    "printWidth": 80,
+    "tabWidth": 2,
+    "endOfLine": "lf"
   }
 }
