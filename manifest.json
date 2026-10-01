@@ -9,7 +9,8 @@
 			"id": "similar-works@zhi.dev",
 			"strict_min_version": "7.0",
 			"strict_max_version": "10.*",
-			"update_url": "https://zhi.dev/similar-works/updates.json"
+			"update_url": "https://raw.githubusercontent.com/lzcn/zotero-similar-works/main/updates.json"
 		}
-	}
+	},
+	"homepage_url": "https://github.com/lzcn/zotero-similar-works"
 }

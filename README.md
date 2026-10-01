@@ -16,6 +16,10 @@
 
 ## 安装与升级
 
+发布仓库：https://github.com/lzcn/zotero-similar-works
+
+公开版本可从 [Releases](https://github.com/lzcn/zotero-similar-works/releases) 下载 `similar-works.xpi`。
+
 ```sh
 ./build.sh
 ```
@@ -28,7 +32,7 @@ Zotero → Tools → Plugins → Tools for all plugins → Install Plugin From F
 
 `<Zotero 数据目录>/fulltext.sqlite` 是 Zotero 自身的全文检索数据库，不是本插件创建的文件，必须保留原名。插件读取 Zotero 提取的全文缓存，自建词频向量存于 `similar-works/similarity.sqlite`。
 
-需要 Zotero 7–10；当前验收环境为 Zotero 10.0.5。Zotero 10 安装校验要求 `applications.zotero.update_url`，manifest 保留 `https://zhi.dev/similar-works/updates.json`。该端点尚未部署；公开发布前必须部署真实更新清单，当前不能保证自动更新。
+需要 Zotero 7–10；当前验收环境为 Zotero 10.0.5。Zotero 10 安装校验要求 `applications.zotero.update_url`，manifest 保留 `https://raw.githubusercontent.com/lzcn/zotero-similar-works/main/updates.json`。更新清单由构建脚本生成，安装包来自本仓库 Release；发布草稿公开之前，其下载地址不可用。
 
 内部 `recommendationCount = 10`、`allowMetadataOnlyRecommendations = true`，均不提供设置界面。扫描版或缺失全文的文献会回退到元数据。零词项重叠时不推荐；可用候选不足时显示少于 10 篇。
 

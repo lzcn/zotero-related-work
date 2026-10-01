@@ -1,0 +1,19 @@
+{
+  "addons": {
+    "similar-works@zhi.dev": {
+      "updates": [
+        {
+          "version": "0.1.0",
+          "update_link": "https://github.com/lzcn/zotero-similar-works/releases/download/v0.1.0/similar-works.xpi",
+          "update_hash": "sha256:cf4ecfa6c3bb94b9cdae2a0240bf9f75a4b560c9bb55401749522d88517fbef1",
+          "applications": {
+            "zotero": {
+              "strict_min_version": "7.0",
+              "strict_max_version": "10.*"
+            }
+          }
+        }
+      ]
+    }
+  }
+}
