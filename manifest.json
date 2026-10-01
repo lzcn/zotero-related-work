@@ -1,0 +1,14 @@
+{
+	"manifest_version": 2,
+	"name": "Similar Works",
+	"version": "0.3.2",
+	"description": "Find similar works in your Zotero library using existing full-text indexes. Local, incremental, and lightweight.",
+	"author": "zhi",
+	"applications": {
+		"zotero": {
+			"id": "related-work@zhi.dev",
+			"strict_min_version": "7.0",
+			"strict_max_version": "10.*"
+		}
+	}
+}
