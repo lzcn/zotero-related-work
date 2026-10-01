@@ -9,4 +9,3 @@ pref("extensions.zotero.relatedwork.minFulltextTerms", 25);
 pref("extensions.zotero.relatedwork.recommendationRefreshIntervalMs", 30000);
 pref("extensions.zotero.relatedwork.backgroundStartupDelayMs", 15000);
 pref("extensions.zotero.relatedwork.requestMissingFulltext", false);
-

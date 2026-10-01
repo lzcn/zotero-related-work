@@ -255,7 +255,7 @@ var SWSection = {
 			return;
 		}
 
-		
+
 		var k = SWResultLimit(SWPref("recommendationCount", 10));
 		var lastProgress = 0;
 		var includeWeak = SWPref("allowMetadataOnlyRecommendations", true);
@@ -354,7 +354,7 @@ var SWSection = {
 				flag.textContent = weakFlag;
 				side.appendChild(flag);
 			}
-			
+
 			let itemId = r.item.id;
 			let srcTabType = tabType;
 			row.addEventListener("click", () => this._selectItem(doc, itemId, srcTabType));
