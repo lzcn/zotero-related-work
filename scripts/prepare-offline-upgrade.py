@@ -23,11 +23,12 @@ for process in ('zotero', 'Zotero'):
         raise SystemExit('Zotero must be fully closed before preparing files.')
 with zipfile.ZipFile(args.package) as package:
     manifest = json.loads(package.read('manifest.json'))
-    if manifest['version'] != '0.1.0' or manifest['applications']['zotero']['id'] != 'similar-works@zhi.dev':
+    if manifest['version'] != '0.1.0' or manifest['applications']['zotero']['id'] != 'similar-works@lzcn':
         raise SystemExit('Unexpected plugin identity or version.')
 old_dir, new_dir = args.data / 'related-work', args.data / 'similar-works'
-old_xpi = args.profile / 'extensions' / 'related-work@zhi.dev.xpi'
-new_xpi = args.profile / 'extensions' / 'similar-works@zhi.dev.xpi'
+old_xpis = [args.profile / 'extensions' / name for name in
+            ('related-work@zhi.dev.xpi', 'similar-works@zhi.dev.xpi')]
+new_xpi = args.profile / 'extensions' / 'similar-works@lzcn.xpi'
 prefs = args.profile / 'prefs.js'
 if old_dir.exists() and new_dir.exists():
     raise SystemExit('Both data directories exist; refusing to choose or overwrite a database.')
@@ -37,7 +38,7 @@ stamp = datetime.datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y%m%d-%H%M%S
 backup = args.backup_root / stamp
 backup.mkdir(parents=True, exist_ok=False)
 shutil.copytree(old_dir if old_dir.exists() else new_dir, backup / 'vector-data')
-for file in (old_xpi, new_xpi, prefs, args.profile / 'extensions.json'):
+for file in (*old_xpis, new_xpi, prefs, args.profile / 'extensions.json'):
     if file.exists():
         shutil.copy2(file, backup / file.name)
 text = prefs.read_text()
@@ -59,8 +60,9 @@ try:
         old_dir.rename(new_dir)
         moved = True
     # Remove the legacy package from the load directory so it cannot recreate the old database.
-    if old_xpi.exists():
-        old_xpi.unlink()  # Original bytes are retained in the rollback backup.
+    for old_xpi in old_xpis:
+        if old_xpi.exists():
+            old_xpi.unlink()  # Original bytes are retained in the rollback backup.
     temporary = new_xpi.with_suffix('.xpi.new')
     shutil.copy2(args.package, temporary)
     os.replace(temporary, new_xpi)
@@ -70,7 +72,7 @@ try:
 except Exception:
     if moved:
         new_dir.rename(old_dir)
-    for file in (old_xpi, new_xpi, prefs):
+    for file in (*old_xpis, new_xpi, prefs):
         saved = backup / file.name
         if saved.exists():
             shutil.copy2(saved, file)

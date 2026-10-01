@@ -26,7 +26,7 @@
 
 Zotero → Tools → Plugins → Tools for all plugins → Install Plugin From File → 选择 `similar-works.xpi`。
 
-显示名为 Similar Works；源码目录、安装包、图标、翻译文件与数据目录统一使用 `similar-works`。插件 ID 为 `similar-works@zhi.dev`，配置前缀为 `extensions.zotero.similarworks`。
+显示名为 Similar Works；源码目录、安装包、图标、翻译文件与数据目录统一使用 `similar-works`。插件 ID 为 `similar-works@lzcn`，配置前缀为 `extensions.zotero.similarworks`。
 
 升级旧版时先停用旧插件并重启 Zotero，使数据库连接关闭，再安装新版。首次启动把整个旧数据目录 `related-work` 移动为 `similar-works`，包括数据库和 WAL 文件，复用已有向量；同时迁移旧配置并清理旧配置键。目标目录已经存在时停止迁移，避免覆盖或错误使用空库。旧标识仅在迁移兼容代码里出现。
 

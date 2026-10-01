@@ -2,8 +2,10 @@
 var SWMigration = {
  async prepare() {
   var { AddonManager } = ChromeUtils.importESModule("resource://gre/modules/AddonManager.sys.mjs");
-  var legacy = await AddonManager.getAddonByID("related-work@zhi.dev");
-  if (legacy?.isActive) throw new Error("Disable the old plugin and restart Zotero before installing Similar Works so its database is closed.");
+  for (var id of ["related-work@zhi.dev", "similar-works@zhi.dev"]) {
+   var legacy = await AddonManager.getAddonByID(id);
+   if (legacy?.isActive) throw new Error("Disable the old plugin and restart Zotero before installing Similar Works so its database is closed.");
+  }
   var oldDir = PathUtils.join(Zotero.DataDirectory.dir, "related-work");
   var newDir = PathUtils.join(Zotero.DataDirectory.dir, "similar-works");
   var oldDB = PathUtils.join(oldDir, "similarity.sqlite");

@@ -6,7 +6,7 @@ const path = require('node:path');
 function fixture(active=false,entries=[]) {
  const files=new Set(entries),moves=[],prefs=new Map();
  const ctx=vm.createContext({
-  ChromeUtils:{importESModule:()=>({AddonManager:{getAddonByID:async id=>{assert.equal(id,'related-work@zhi.dev');return {isActive:active};}}})},
+  ChromeUtils:{importESModule:()=>({AddonManager:{getAddonByID:async id=>{assert.ok(['related-work@zhi.dev','similar-works@zhi.dev'].includes(id));return {isActive:active};}}})},
   PathUtils:path.posix,
   IOUtils:{exists:async p=>files.has(p),move:async(a,b,o)=>{assert.equal(o.noOverwrite,true);moves.push([a,b]);for(const f of [...files])if(f===a||f.startsWith(a+'/')){files.delete(f);files.add(b+f.slice(a.length));}}},
   Services:{prefs:{prefHasUserValue:p=>prefs.has(p.replace('extensions.zotero.','')),clearUserPref:p=>prefs.delete(p.replace('extensions.zotero.',''))}},
