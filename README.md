@@ -22,7 +22,9 @@ Open **Tools → Plugins** in Zotero, select **Install Plugin From File** from t
 
 ## Usage
 
-Select an item and expand Similar Works to calculate recommendations automatically. Cached results appear immediately. When the index changes or the cache is over 24 hours old, results update in the background. Refresh forces a new calculation; click a result to open it.
+Select an item and expand Similar Works to calculate recommendations automatically. Cached results appear immediately. When an item changes, its affected recommendations update in the background. Results are revalidated after an IDF rebuild or after 24 hours. Refresh forces a new calculation; click a result to open it.
+
+Indexing runs slowly in the background. Queries use 256-feature, field-weighted BM25 fingerprints, Block-Max WAND to retrieve up to 300 candidates, and sparse cosine reranking. SimHash filters probable duplicates. Cached Top-50 lists update incrementally; the sidebar shows 10 results. First-time indexing must finish before full-text recommendations are available.
 
 ## Data and backup
 

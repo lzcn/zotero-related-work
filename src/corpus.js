@@ -1,4 +1,4 @@
-var SW_SCHEMA_VERSION = 1;
+var SW_SCHEMA_VERSION = 2;
 
 /** @param {number} ms @returns {Promise<void>} */
 function swYield(ms) {
@@ -10,17 +10,22 @@ function swYield(ms) {
 
 var SWCorpus = class {
   constructor() {
+    this._stopped = false;
+    this._tasks = [];
+    this._taskRunning = false;
+    this._taskPromises = new WeakMap();
+    this._taskDrain = Promise.resolve();
+    this._epochPending = false;
+    this._idleRegistered = false;
+    this.search = new SWSearch.Index();
     this.docs = new Map();
     this.df = new Map();
-    this._postings = new Map();
     this.n = 0;
     this.dfVersion = 0;
     this.revision = 0;
     this.lastChangedAt = 0;
     this._sourceStates = new Map();
     this._recommendations = new Map();
-    this._norms = new Map();
-    this._normsVersion = -1;
     this._db = null;
     this._dbPath = null;
     this.progress = { phase: "idle", done: 0, total: 0 };
@@ -67,6 +72,19 @@ var SWCorpus = class {
     await this._db.execute(
       "CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL)",
     );
+    const schema = await this._db.execute(
+      "SELECT v FROM meta WHERE k = 'schemaVersion'",
+    );
+    if (
+      schema.length &&
+      Number(schema[0].getResultByName("v")) > SW_SCHEMA_VERSION
+    )
+      throw new Error("The index was created by a newer plugin version");
+    if (schema.length && Number(schema[0].getResultByName("v")) === 1) {
+      const backupPath = this._dbPath + ".v1-backup";
+      if (!(await IOUtils.exists(backupPath)))
+        await this._db.execute("VACUUM INTO ?", [backupPath]);
+    }
     await this._db.execute(
       "CREATE TABLE IF NOT EXISTS doc_updates (key TEXT PRIMARY KEY, updatedAt INTEGER NOT NULL)",
     );
@@ -76,6 +94,35 @@ var SWCorpus = class {
     await this._db.execute(
       "CREATE TABLE IF NOT EXISTS recommendations (cacheKey TEXT PRIMARY KEY, payload TEXT NOT NULL, computedAt INTEGER NOT NULL)",
     );
+    await this._db.execute(
+      "CREATE TABLE IF NOT EXISTS fingerprints (key TEXT PRIMARY KEY, counts BLOB NOT NULL, signature BLOB NOT NULL, epoch INTEGER NOT NULL, simhash BLOB NOT NULL)",
+    );
+    var models = await this._db.execute(
+      "SELECT v FROM meta WHERE k = 'signatureModel'",
+    );
+    if (models.length) {
+      try {
+        const model = JSON.parse(models[0].getResultByName("v"));
+        if (
+          model.algorithm === 2 &&
+          Number.isInteger(model.epoch) &&
+          Array.isArray(model.df)
+        ) {
+          this.search.epoch = model.epoch;
+          this.search.epochN = model.n;
+          this.search.averageLength = model.averageLength;
+          this.search.frozenDF = new Map(model.df);
+        }
+      } catch (error) {
+        Zotero.logError(error);
+      }
+    }
+    const changes = await this._db.execute(
+      "SELECT v FROM meta WHERE k = 'signatureChanges'",
+    );
+    this._loadedChanges = changes.length
+      ? Number(changes[0].getResultByName("v")) || 0
+      : 0;
     var revisions = await this._db.execute(
       "SELECT v FROM meta WHERE k = 'corpusRevision'",
     );
@@ -93,11 +140,13 @@ var SWCorpus = class {
     var countRows = await this._db.execute("SELECT COUNT(*) AS c FROM docs");
     var total = countRows.length ? countRows[0].getResultByName("c") : 0;
     this.progress = { phase: "loading", done: 0, total: total };
+    var rebuild = !this.search.epoch;
     var offset = 0;
-    var chunk = 100;
-    while (true) {
+    var chunk = this.search.epoch ? 100 : 5;
+    var sliceStarted = Date.now();
+    while (!this._stopped) {
       var rows = await this._db.execute(
-        "SELECT key, hash, weak, tf FROM docs ORDER BY key LIMIT " +
+        "SELECT d.key, d.hash, d.weak, d.tf, f.counts, f.signature, f.epoch, f.simhash FROM docs d LEFT JOIN fingerprints f ON f.key = d.key ORDER BY d.key LIMIT " +
           chunk +
           " OFFSET " +
           offset,
@@ -106,100 +155,247 @@ var SWCorpus = class {
         break;
       }
       for (var row of rows) {
+        if (this._stopped) return;
         var key = row.getResultByName("key");
         var tf;
         try {
-          var obj = JSON.parse(row.getResultByName("tf"));
-          tf = new Map(Object.entries(obj));
+          var counts = row.getResultByName("counts");
+          tf = counts
+            ? SWSearch.decodeCounts(counts)
+            : new Map(Object.entries(JSON.parse(row.getResultByName("tf"))));
         } catch (e) {
-          continue;
+          throw new Error("Invalid fingerprint counts for " + key, {
+            cause: e,
+          });
         }
         var doc = {
           hash: row.getResultByName("hash"),
           weak: !!parseInt(row.getResultByName("weak")),
           tf: tf,
+          signature:
+            row.getResultByName("epoch") === this.search.epoch
+              ? row.getResultByName("signature")
+              : null,
+          simhash: row.getResultByName("simhash")
+            ? SWSearch.decodeSimhash(row.getResultByName("simhash"))
+            : null,
         };
+        if (!doc.signature) rebuild = true;
         this._memInsert(key, doc, false);
+        if (counts) this.search.docs.get(key).counts = null;
+        if (Date.now() - sliceStarted >= 6) {
+          await swYield(5);
+          sliceStarted = Date.now();
+        }
       }
       offset += rows.length;
       this.progress = { phase: "loading", done: offset, total: total };
-      await swYield(20);
+      await swYield(this.search.epoch ? 1 : 20);
     }
+    if (rebuild) {
+      await this.search.rebuild(
+        () => swYield(40),
+        () => this._stopped,
+        (doc) => this._readCounts(doc.key),
+      );
+      if (this._stopped) return;
+      await this._persistFingerprints();
+    } else this.search.changes = this._loadedChanges;
     this.progress = { phase: "ready", done: this.n, total: this.n };
+    void this._maintainEpoch();
   }
 
   _memInsert(key, doc, bump) {
-    this.docs.set(key, doc);
-    this.n++;
-    for (var t of doc.tf.keys()) {
-      this.df.set(t, (this.df.get(t) || 0) + 1);
-      var posting = new Set(this._postings.get(t));
-      posting.add(key);
-      this._postings.set(t, posting);
-    }
-    if (bump) {
-      this.dfVersion++;
-    }
+    this.search.add(key, doc.tf, doc.weak, doc.signature, doc.simhash);
+    this.docs.set(key, { hash: doc.hash, weak: doc.weak });
+    this.n = this.docs.size;
+    this.df = this.search.df;
+    if (bump) this.dfVersion++;
   }
 
-  _memRemove(key) {
-    var doc = this.docs.get(key);
-    if (!doc) {
-      return false;
-    }
+  async _memRemove(key, counts = null) {
+    if (!this.docs.has(key)) return false;
+    this.search.remove(key, counts || (await this._readCounts(key)));
     this.docs.delete(key);
-    this._norms.delete(key);
-    this.n--;
-    for (var t of doc.tf.keys()) {
-      var posting = new Set(this._postings.get(t));
-      posting.delete(key);
-      if (posting.size) this._postings.set(t, posting);
-      else this._postings.delete(t);
-      var c = this.df.get(t) || 0;
-      if (c <= 1) {
-        this.df.delete(t);
-      } else {
-        this.df.set(t, c - 1);
-      }
-    }
+    this.n = this.docs.size;
     this.dfVersion++;
     return true;
   }
 
-  async upsertDoc(key, hash, weak, tf) {
+  async _persistFingerprints() {
+    if (!this._db) return;
+    let batch = [];
+    const flush = async () => {
+      await this._db.executeTransaction(async () => {
+        for (const doc of batch) await this._writeFingerprint(doc);
+      });
+      for (const doc of batch) doc.counts = null;
+      batch = [];
+      await swYield(40);
+    };
+    for (const doc of this.search.docs.values()) {
+      if (this._stopped) return;
+      batch.push(doc);
+      if (batch.length === 20) await flush();
+    }
+    if (batch.length) await flush();
+    await this._db.execute(
+      "INSERT OR REPLACE INTO meta (k, v) VALUES ('signatureModel', ?)",
+      [
+        JSON.stringify({
+          algorithm: 2,
+          epoch: this.search.epoch,
+          n: this.search.epochN,
+          averageLength: this.search.averageLength,
+          df: [...this.search.frozenDF],
+        }),
+      ],
+    );
+    await this._db.execute(
+      "INSERT OR REPLACE INTO meta (k, v) VALUES ('signatureChanges', ?)",
+      [String(this.search.changes)],
+    );
+  }
+
+  async _readCounts(key) {
+    const doc = this.search.docs.get(key);
+    if (doc?.counts) return doc.counts;
+    if (!this._db) throw new Error("Missing feature counts for " + key);
+    const rows = await this._db.execute(
+      "SELECT counts FROM fingerprints WHERE key = ?",
+      [key],
+    );
+    if (!rows.length)
+      throw new Error("Missing stored feature counts for " + key);
+    return rows[0].getResultByName("counts");
+  }
+
+  async _writeFingerprint(doc) {
+    const signature = SWSearch.encodeSignature(doc.vector);
+    if (doc.counts) {
+      await this._db.execute(
+        "INSERT OR REPLACE INTO fingerprints (key, counts, signature, epoch, simhash) VALUES (?, ?, ?, ?, ?)",
+        [
+          doc.key,
+          doc.counts,
+          signature,
+          this.search.epoch,
+          SWSearch.encodeSimhash(doc.simhash),
+        ],
+      );
+      await this._db.execute("UPDATE docs SET tf = '{}' WHERE key = ?", [
+        doc.key,
+      ]);
+    } else
+      await this._db.execute(
+        "UPDATE fingerprints SET signature = ?, epoch = ? WHERE key = ?",
+        [signature, this.search.epoch, doc.key],
+      );
+  }
+
+  async _maintainEpoch() {
+    if (this._epochPending || !this.search.needsEpoch() || this._stopped)
+      return;
+    const work = () => {
+      if (this._stopped || this._epochPending || !this.search.needsEpoch())
+        return Promise.resolve();
+      this._epochPending = true;
+      return this.runTask(async () => {
+        try {
+          if (
+            await this.search.rebuild(
+              async () => {
+                await swYield(80);
+                await this.yieldToForeground();
+              },
+              () => this._stopped,
+              (doc) => this._readCounts(doc.key),
+            )
+          ) {
+            this.dfVersion++;
+            await this._persistFingerprints();
+          }
+        } finally {
+          this._epochPending = false;
+        }
+      }, -1);
+    };
+    const idleDB =
+      typeof Zotero !== "undefined"
+        ? /** @type {Zotero.DB & Partial<SWIdleDatabase>} */ (Zotero.DB)
+        : null;
+    if (typeof idleDB?.onIdle === "function") {
+      if (!this._idleRegistered) {
+        this._idleRegistered = true;
+        idleDB.onIdle(work);
+      }
+    } else
+      void work().catch((error) => {
+        if (typeof Zotero !== "undefined") Zotero.logError(error);
+      });
+  }
+
+  upsertDoc(key, hash, weak, tf, priority = 0) {
+    return this.runTask(() => this._upsertDoc(key, hash, weak, tf), priority);
+  }
+
+  async _upsertDoc(key, hash, weak, tf) {
     var prev = this.docs.get(key);
     if (prev && prev.hash === hash) {
       return false;
     }
-    if (prev) {
-      this._memRemove(key);
-    }
+    const previousCounts = prev ? await this._readCounts(key) : null;
+    const previousFingerprint = this.search.docs.get(key);
+    const previousRevision = this.revision,
+      previousChanges = this.search.changes;
+    if (prev) await this._memRemove(key, previousCounts);
     this._memInsert(key, { hash: hash, weak: weak, tf: tf }, true);
     this.revision++;
     this.lastChangedAt = Date.now();
     if (this._db) {
-      var obj = {};
-      for (var [t, c] of tf) {
-        obj[t] = c;
-      }
       try {
         await this._persistChange(
-          "INSERT OR REPLACE INTO docs (key, hash, weak, tf) VALUES (?, ?, ?, ?)",
-          [key, hash, weak ? 1 : 0, JSON.stringify(obj)],
+          "INSERT OR REPLACE INTO docs (key, hash, weak, tf) VALUES (?, ?, ?, '{}')",
+          [key, hash, weak ? 1 : 0],
           key,
           false,
         );
       } catch (e) {
-        Zotero.logError(new Error("[similar-works] persist doc failed: " + e));
+        await this._memRemove(key, this.search.docs.get(key).counts);
+        if (prev)
+          this._memInsert(
+            key,
+            {
+              ...prev,
+              tf: SWSearch.decodeCounts(previousCounts),
+              signature: SWSearch.encodeSignature(previousFingerprint.vector),
+              simhash: previousFingerprint.simhash,
+            },
+            false,
+          );
+        this.revision = previousRevision;
+        this.search.changes = previousChanges;
+        throw new Error("[similar-works] persist doc failed", { cause: e });
       }
     }
+    if (this._db) this.search.docs.get(key).counts = null;
+    await this._reverseUpdate(key);
+    void this._maintainEpoch();
     return true;
   }
 
-  async removeDoc(key) {
-    if (!this._memRemove(key)) {
-      return false;
-    }
+  removeDoc(key) {
+    return this.runTask(() => this._removeDoc(key));
+  }
+
+  async _removeDoc(key) {
+    const previous = this.docs.get(key);
+    if (!previous) return false;
+    const counts = await this._readCounts(key),
+      fingerprint = this.search.docs.get(key);
+    const previousRevision = this.revision,
+      previousChanges = this.search.changes;
+    await this._memRemove(key, counts);
     this.revision++;
     this.lastChangedAt = Date.now();
     if (this._db) {
@@ -211,9 +407,23 @@ var SWCorpus = class {
           true,
         );
       } catch (e) {
-        Zotero.logError(e);
+        this._memInsert(
+          key,
+          {
+            ...previous,
+            tf: SWSearch.decodeCounts(counts),
+            signature: SWSearch.encodeSignature(fingerprint.vector),
+            simhash: fingerprint.simhash,
+          },
+          false,
+        );
+        this.revision = previousRevision;
+        this.search.changes = previousChanges;
+        throw new Error("[similar-works] delete doc failed", { cause: e });
       }
     }
+    await this._reverseUpdate(key);
+    void this._maintainEpoch();
     return true;
   }
 
@@ -224,17 +434,24 @@ var SWCorpus = class {
         "INSERT OR REPLACE INTO meta (k, v) VALUES ('corpusRevision', ?)",
         [String(revision)],
       );
+      await this._db.execute(
+        "INSERT OR REPLACE INTO meta (k, v) VALUES ('signatureChanges', ?)",
+        [String(this.search.changes)],
+      );
       if (removed) {
         await this._db.execute("DELETE FROM doc_updates WHERE key = ?", [key]);
         await this._db.execute("DELETE FROM source_updates WHERE key = ?", [
           key,
         ]);
         this._sourceStates.delete(key);
-      } else
+        await this._db.execute("DELETE FROM fingerprints WHERE key = ?", [key]);
+      } else {
+        await this._writeFingerprint(this.search.docs.get(key));
         await this._db.execute(
           "INSERT OR REPLACE INTO doc_updates (key, updatedAt) VALUES (?, ?)",
           [key, Date.now()],
         );
+      }
     });
   }
 
@@ -255,6 +472,58 @@ var SWCorpus = class {
     this._sourceStates.set(key, state);
   }
 
+  runTask(work, priority = 0) {
+    let task;
+    const promise = new Promise((resolve, reject) => {
+      task = { work, priority, resolve, reject };
+      this._tasks.push(task);
+    });
+    this._taskPromises.set(promise, task);
+    if (!this._taskRunning) this._taskDrain = this._drainTasks();
+    return promise;
+  }
+
+  promote(promise, priority) {
+    const task = this._taskPromises?.get(promise);
+    if (task) task.priority = Math.max(task.priority, priority);
+  }
+
+  async _drainTasks() {
+    if (this._taskRunning) return;
+    this._taskRunning = true;
+    try {
+      while (this._tasks.length) {
+        this._tasks.sort((a, b) => b.priority - a.priority);
+        var task = this._tasks.shift();
+        if (this._stopped) {
+          task.resolve(undefined);
+          continue;
+        }
+        try {
+          task.resolve(await task.work());
+        } catch (error) {
+          task.reject(error);
+        }
+      }
+    } finally {
+      this._taskRunning = false;
+    }
+  }
+
+  async yieldToForeground() {
+    // Called only at safe boundaries of background indexing, before index mutation.
+    while (!this._stopped) {
+      var index = this._tasks.findIndex((task) => task.priority > 0);
+      if (index < 0) return;
+      var task = this._tasks.splice(index, 1)[0];
+      try {
+        task.resolve(await task.work());
+      } catch (error) {
+        task.reject(error);
+      }
+    }
+  }
+
   async getRecommendations(queryKey, includeWeak) {
     var cacheKey = JSON.stringify([queryKey, includeWeak]);
     var cached = this._recommendations.get(cacheKey);
@@ -270,32 +539,41 @@ var SWCorpus = class {
         Zotero.logError(e);
       }
     }
-    if (
-      !cached ||
-      cached.algorithm !== 1 ||
-      !Array.isArray(cached.matches) ||
-      !Number.isFinite(cached.computedAt) ||
-      !Number.isFinite(cached.revision) ||
-      cached.matches.some(
-        (m) =>
-          typeof m.key !== "string" ||
-          !Number.isFinite(m.score) ||
-          m.score < 0 ||
-          m.score > 1,
-      )
-    )
-      return null;
+    if (!this._validRecommendations(cached)) return null;
     this._recommendations.delete(cacheKey);
     this._recommendations.set(cacheKey, cached);
-    while (this._recommendations.size > 200)
+    while (this._recommendations.size > 1000)
       this._recommendations.delete(this._recommendations.keys().next().value);
     return cached;
+  }
+
+  _validRecommendations(cached) {
+    return (
+      cached &&
+      cached.algorithm === 2 &&
+      typeof cached.queryHash === "string" &&
+      Number.isInteger(cached.epoch) &&
+      cached.epoch >= 0 &&
+      Number.isFinite(cached.computedAt) &&
+      Number.isFinite(cached.revision) &&
+      Array.isArray(cached.matches) &&
+      cached.matches.length <= 50 &&
+      cached.matches.every(
+        (m) =>
+          m &&
+          typeof m.key === "string" &&
+          Number.isFinite(m.score) &&
+          m.score >= 0 &&
+          m.score <= 1,
+      )
+    );
   }
 
   recommendationsFresh(cached, queryKey) {
     return (
       cached &&
-      cached.revision === this.revision &&
+      cached.epoch === this.search.epoch &&
+      !cached.dirty &&
       cached.queryHash === this.docs.get(queryKey)?.hash &&
       Date.now() - cached.computedAt < 24 * 60 * 60 * 1000
     );
@@ -307,23 +585,26 @@ var SWCorpus = class {
     matches,
     revision,
     queryHash,
+    epoch = this.search.epoch,
   ) {
     // A yielded computation must never be tagged with a newer index revision.
     if (
+      epoch !== this.search.epoch ||
       revision !== this.revision ||
       queryHash !== this.docs.get(queryKey)?.hash
     )
       return;
     var cacheKey = JSON.stringify([queryKey, includeWeak]);
     var cached = {
-      algorithm: 1,
+      algorithm: 2,
+      epoch: this.search.epoch,
       revision,
       queryHash,
       computedAt: Date.now(),
-      matches: matches.slice(0, 100),
+      matches: matches.slice(0, 50),
     };
     this._recommendations.set(cacheKey, cached);
-    while (this._recommendations.size > 200)
+    while (this._recommendations.size > 1000)
       this._recommendations.delete(this._recommendations.keys().next().value);
     if (this._db) {
       try {
@@ -342,153 +623,157 @@ var SWCorpus = class {
     }
   }
 
-  idf(term) {
-    if (!this.n) {
-      return 1;
-    }
-    var d = this.df.get(term) || 0;
-    return Math.log((this.n + 1) / (d + 1)) + 1;
-  }
-
-  _norm(key, tf) {
-    if (this._normsVersion !== this.dfVersion) {
-      this._norms.clear();
-      this._normsVersion = this.dfVersion;
-    }
-    var cached = this._norms.get(key);
-    if (cached !== undefined) {
-      return cached;
-    }
-    var sum = 0;
-    for (var [t, c] of tf) {
-      var w = (1 + Math.log(c)) * this.idf(t);
-      sum += w * w;
-    }
-    var norm = Math.sqrt(sum);
-    this._norms.set(key, norm);
-    return norm;
-  }
-
-  *_scoreCandidates(queryKey, filter) {
-    var q = this.docs.get(queryKey);
-    if (!q || this.n < 2) return;
-    var qn = this._norm(queryKey, q.tf);
-    if (!qn) {
-      return [];
-    }
-    var candidates = new Set();
-    var queryWeights = new Map();
-    for (var [term, count] of q.tf) {
-      queryWeights.set(term, (1 + Math.log(count)) * this.idf(term));
-      for (var candidateKey of this._postings.get(term) || [])
-        candidates.add(candidateKey);
-    }
-    for (var [key, d] of this.docs) {
-      if (key === queryKey) {
-        continue;
-      }
-      if (filter && !filter(key, d)) {
-        continue;
-      }
-      // No shared terms means an exact zero score; avoid scanning either vector.
-      if (!candidates.has(key)) {
-        yield null;
-        continue;
-      }
-      var small;
-      var large;
-      if (q.tf.size <= d.tf.size) {
-        small = q.tf;
-        large = d.tf;
-      } else {
-        small = d.tf;
-        large = q.tf;
-      }
-      var dot = 0;
-      for (var [t, c] of small) {
-        var c2 = large.get(t);
-        if (c2) {
-          var w1 = queryWeights.get(t);
-          var documentCount = small === q.tf ? c2 : c;
-          var w2 = (1 + Math.log(documentCount)) * this.idf(t);
-          dot += w1 * w2;
+  async _reverseUpdate(changedKey) {
+    const changed = this.search.docs.get(changedKey);
+    // Persisted caches are bounded at 1000. Read their small Top-K payloads,
+    // never compare full vectors across all document pairs.
+    if (this._db && !this._reverseLoaded) {
+      this._reverseLoaded = true;
+      const rows = await this._db.execute(
+        "SELECT cacheKey, payload FROM recommendations",
+      );
+      for (const row of rows) {
+        try {
+          const key = row.getResultByName("cacheKey"),
+            payload = JSON.parse(row.getResultByName("payload"));
+          const decodedKey = JSON.parse(key);
+          if (
+            Array.isArray(decodedKey) &&
+            typeof decodedKey[0] === "string" &&
+            typeof decodedKey[1] === "boolean" &&
+            this._validRecommendations(payload) &&
+            !this._recommendations.has(key)
+          )
+            this._recommendations.set(key, payload);
+        } catch (error) {
+          Zotero.logError(error);
         }
       }
-      if (dot <= 0) {
-        yield null;
-        continue;
-      }
-      var dn = this._norm(key, d.tf);
-      if (!dn) {
-        continue;
-      }
-      yield [key, Math.min(1, Math.max(0, dot / (qn * dn)))];
     }
+    let processed = 0;
+    for (const [cacheKey, cached] of this._recommendations) {
+      const original = JSON.stringify(cached);
+      const [queryKey, includeWeak] = JSON.parse(cacheKey);
+      const query = this.search.docs.get(queryKey);
+      const before = cached.matches.some((m) => m.key === changedKey);
+      if (queryKey === changedKey) cached.dirty = true;
+      else if (
+        cached.epoch === this.search.epoch &&
+        query &&
+        queryKey.split("/")[0] === changedKey.split("/")[0]
+      ) {
+        const matches = cached.matches.filter((m) => m.key !== changedKey);
+        if (before) cached.dirty = true; // Deletion can expose an unknown next neighbor.
+        if (changed && (includeWeak || !changed.weak)) {
+          const score = SWSearch.cosine(query.vector, changed.vector);
+          const duplicate =
+            !query.weak &&
+            !changed.weak &&
+            query.length >= 100 &&
+            changed.length >= 100 &&
+            SWSearch.distance(query.simhash, changed.simhash) <= 3 &&
+            score >= 0.95;
+          const duplicateNeighbor =
+            !changed.weak &&
+            changed.length >= 100 &&
+            matches.some((m) => {
+              const neighbor = this.search.docs.get(m.key);
+              return (
+                neighbor &&
+                !neighbor.weak &&
+                neighbor.length >= 100 &&
+                SWSearch.distance(neighbor.simhash, changed.simhash) <= 3 &&
+                SWSearch.cosine(neighbor.vector, changed.vector) >= 0.95
+              );
+            });
+          if (score > 0 && !duplicate && !duplicateNeighbor)
+            matches.push({ key: changedKey, score, weak: changed.weak });
+        }
+        matches.sort((a, b) => b.score - a.score || a.key.localeCompare(b.key));
+        cached.matches = matches.slice(0, 50);
+      }
+      if (this._db && original !== JSON.stringify(cached))
+        await this._db.execute(
+          "UPDATE recommendations SET payload = ? WHERE cacheKey = ?",
+          [JSON.stringify(cached), cacheKey],
+        );
+      if (++processed % 20 === 0) {
+        await swYield(40);
+        await this.yieldToForeground();
+        if (this._stopped) break;
+      }
+    }
+    while (this._recommendations.size > 1000)
+      this._recommendations.delete(this._recommendations.keys().next().value);
   }
 
-  _rankResults(results, k) {
-    results.sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
-    return results
-      .slice(0, k)
-      .map((r) => ({ key: r[0], score: r[1], weak: this.docs.get(r[0]).weak }));
-  }
-
+  // Synchronous helper for offline consumers; UI uses bounded Block-Max WAND.
   scoreTopK(queryKey, k, filter) {
-    k = Math.floor(Number(k));
-    if (!Number.isFinite(k) || k < 1) return [];
-    return this._rankResults(
-      Array.from(this._scoreCandidates(queryKey, filter)).filter(Boolean),
-      k,
-    );
+    const query = this.search.docs.get(queryKey);
+    if (!query || !Number.isFinite(k) || k < 1) return [];
+    return [...this.search.docs.values()]
+      .filter(
+        (doc) => doc.key !== queryKey && (!filter || filter(doc.key, doc)),
+      )
+      .map((doc) => ({
+        key: doc.key,
+        score: SWSearch.cosine(query.vector, doc.vector),
+        weak: doc.weak,
+      }))
+      .filter((match) => match.score > 0)
+      .sort((a, b) => b.score - a.score || a.key.localeCompare(b.key))
+      .slice(0, k);
   }
 
-  async scoreTopKAsync(
+  scoreTopKAsync(
     queryKey,
     k,
     filter,
     cancelled = () => false,
     onProgress = (_progress) => {},
     restMs = 20,
+    onSnapshot = (_revision, _hash, _epoch) => {},
+  ) {
+    return this.runTask(
+      () =>
+        this._scoreTopKAsync(
+          queryKey,
+          k,
+          filter,
+          cancelled,
+          onProgress,
+          restMs,
+          onSnapshot,
+        ),
+      1,
+    ).then((results) => results || []);
+  }
+
+  async _scoreTopKAsync(
+    queryKey,
+    k,
+    filter,
+    cancelled = () => false,
+    onProgress = () => {},
+    restMs = 20,
+    onSnapshot = (_revision, _hash, _epoch) => {},
   ) {
     k = Math.floor(Number(k));
-    if (!Number.isFinite(k) || k < 1) return [];
-    // Freeze the vocabulary statistics while yielding, so background updates
-    // cannot mix different IDF versions in one recommendation list.
-    var snapshot = Object.create(this);
-    snapshot.docs = new Map(this.docs);
-    snapshot.df = new Map(this.df);
-    snapshot._postings = new Map(this._postings);
-    snapshot.n = this.n;
-    snapshot.dfVersion = this.dfVersion;
-    snapshot._normsVersion = this._normsVersion;
-    snapshot._norms = new Map(this._norms);
-    var total = 0;
-    for (var [key, doc] of snapshot.docs)
-      if (key !== queryKey && (!filter || filter(key, doc))) total++;
-    var done = 0;
-    onProgress({ done: 0, total });
-    var results = [],
-      sliceStarted = Date.now();
-    for (var result of snapshot._scoreCandidates(queryKey, filter)) {
-      if (cancelled()) return [];
-      done++;
-      if (result) results.push(result);
-      if (Date.now() - sliceStarted >= 8) {
-        onProgress({ done: Math.min(done, total), total });
-        await swYield(restMs);
-        sliceStarted = Date.now();
-      }
-    }
-    if (cancelled()) return [];
-    onProgress({ done: total, total });
-    if (this.dfVersion === snapshot.dfVersion) {
-      this._norms = snapshot._norms;
-      this._normsVersion = snapshot._normsVersion;
-    }
-    return snapshot._rankResults(results, k);
+    if (!Number.isFinite(k) || k < 1 || this._stopped || cancelled()) return [];
+    onSnapshot(this.revision, this.docs.get(queryKey)?.hash, this.search.epoch);
+    return this.search.search(
+      queryKey,
+      Math.min(50, k),
+      filter,
+      () => this._stopped || cancelled(),
+      () => swYield(Math.min(5, Math.max(0, restMs))),
+      onProgress,
+    );
   }
 
   async close() {
+    this._stopped = true;
+    await this._taskDrain;
     if (this._db) {
       var db = this._db;
       this._db = null;
@@ -496,6 +781,14 @@ var SWCorpus = class {
         await db.close();
       } catch (e) {}
     }
+    this.search.docs.clear();
+    this.search.byID.clear();
+    this.search.postings.clear();
+    this.search.df.clear();
+    this.search.frozenDF.clear();
+    this.docs.clear();
+    this._recommendations.clear();
+    this._sourceStates.clear();
   }
 };
 

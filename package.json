@@ -17,7 +17,7 @@
     "lint": "npm run lint:check",
     "lint:check": "prettier --check . && eslint .",
     "lint:fix": "prettier --write . && eslint . --fix",
-    "test": "node tests/unit.test.js && node --test tests/integration.test.js tests/lifecycle.test.js tests/package.test.mjs",
+    "test": "node tests/unit.test.js && node --test tests/integration.test.js tests/lifecycle.test.js tests/search.test.js tests/package.test.mjs",
     "check": "npm run lint:check && npm test && npm run build",
     "release": "npm run check && node scripts/package-release.mjs",
     "typecheck": "tsc --noEmit"

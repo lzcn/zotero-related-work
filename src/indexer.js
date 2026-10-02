@@ -35,7 +35,7 @@ var SWIndexer = {
     this.corpus = new SWCorpus();
     this._scanPromise = this.corpus.ready
       .then(async () => {
-        var remaining = SWPref("backgroundStartupDelayMs", 15000);
+        var remaining = SWPref("backgroundStartupDelayMs", 30000);
         while (!this._stopped && remaining > 0) {
           await swYield(Math.min(250, remaining));
           remaining -= 250;
@@ -71,7 +71,7 @@ var SWIndexer = {
     }
     if (event === "trash" || event === "delete") {
       for (const id of ids) {
-        var work = this._removeById(id, extraData[id]).catch((e) =>
+        const work = this._removeById(id, extraData[id]).catch((e) =>
           Zotero.logError(e),
         );
         this._pendingRemovals.add(work);
@@ -86,13 +86,14 @@ var SWIndexer = {
       event === "refresh"
     ) {
       for (const id of ids) {
-        this.enqueue(id);
+        this.enqueue(id, 1);
       }
     }
   },
 
   async _removeById(id, extra = {}) {
     await this.corpus.ready;
+    if (this._stopped) return;
     var item = await Zotero.Items.getAsync(id);
     var record = this._itemKeys.get(id);
     var parentID = item?.parentItemID || record?.parentID || extra.parentItemID;
@@ -129,12 +130,19 @@ var SWIndexer = {
     return null;
   },
 
-  enqueue(id) {
-    if (this._stopped || this._queued.has(id)) {
+  enqueue(id, priority = 0) {
+    if (this._stopped) return;
+    if (this._queued.has(id)) {
+      if (priority > 0) {
+        const at = this._queue.indexOf(id);
+        if (at >= 0) this._queue.splice(at, 1);
+        this._queue.unshift(id);
+      }
       return;
     }
     this._queued.add(id);
-    this._queue.push(id);
+    if (priority > 0) this._queue.unshift(id);
+    else this._queue.push(id);
     if (!this._draining) this._drainPromise = this._drain();
   },
 
@@ -147,7 +155,7 @@ var SWIndexer = {
         var ids = await Zotero.Items.getAll(lib.id, true, false, true);
         for (const id of ids) {
           if (this._stopped) return;
-          if (++scanned % 25 === 0) await swYield(20);
+          if (++scanned % 25 === 0) await swYield(100);
           var item = await Zotero.Items.getAsync(id);
           var target = await this.resolveDocItem(item);
           if (!target) continue;
@@ -178,8 +186,13 @@ var SWIndexer = {
       while (!this._stopped && this._queue.length) {
         var id = this._queue.shift();
         this._queued.delete(id);
+        var remaining = Math.max(2000, SWPref("indexDelayMs", 2000));
+        while (!this._stopped && remaining > 0) {
+          await swYield(Math.min(100, remaining));
+          remaining -= 100;
+        }
+        if (this._stopped) break;
         await this._processId(id);
-        await swYield(SWPref("indexDelayMs", 1000));
       }
     } finally {
       this._draining = false;
@@ -197,16 +210,39 @@ var SWIndexer = {
     }
   },
 
+  async ensureForDisplay(item) {
+    var target = await this.resolveDocItem(item);
+    if (!target || this._stopped) return null;
+    var key = this.docKey(target);
+    if (!this.corpus.docs.has(key)) {
+      var metadata = this.metadataText(target);
+      if (metadata)
+        await this.corpus.upsertDoc(
+          key,
+          metadata.hash,
+          true,
+          await SWSearch.extract({
+            title: target.getField("title"),
+            abstract: target.getField("abstractNote"),
+            body: "",
+          }),
+          1,
+        );
+    }
+    if (SWPref("backgroundIndexing", true)) this.enqueue(target.id);
+    return target;
+  },
+
   async ensureNow(item) {
     var target = await this.resolveDocItem(item);
     if (!target) {
       return null;
     }
-    await this.processItem(target);
+    await this.processItem(target, 1);
     return target;
   },
 
-  async processItem(item) {
+  async processItem(item, priority = 0) {
     await this.corpus.ready;
     if (this._stopped || this.corpus.progress.phase !== "ready") return;
     var prior = this._itemKeys.get(item.id);
@@ -224,10 +260,14 @@ var SWIndexer = {
     if (!target) return;
     var pending = this._inFlight.get(target.id);
     if (pending) {
+      this.corpus.promote(pending, priority);
       await pending;
-      return this.processItem(item);
+      return this.processItem(item, priority);
     }
-    var work = this._processDoc(target);
+    var work = this.corpus.runTask(
+      () => this._processDoc(target, priority > 0),
+      priority,
+    );
     this._inFlight.set(target.id, work);
     try {
       await work;
@@ -236,7 +276,7 @@ var SWIndexer = {
     }
   },
 
-  async _processDoc(item) {
+  async _processDoc(item, foreground = false) {
     if (item.isNote() || item.isFeedItem) {
       return;
     }
@@ -245,16 +285,17 @@ var SWIndexer = {
     }
     var key = this.docKey(item);
     if (item.deleted) {
-      await this.corpus.removeDoc(key);
+      await this.corpus._removeDoc(key);
       return;
     }
     var info = await this.extractText(item);
     if (!info) {
-      await this.corpus.removeDoc(key);
+      await this.corpus._removeDoc(key);
       return;
     }
-    if (item.deleted || this._stopped) {
-      await this.corpus.removeDoc(key);
+    if (this._stopped) return;
+    if (item.deleted) {
+      await this.corpus._removeDoc(key);
       return;
     }
     await this.corpus.recordSource(
@@ -266,20 +307,22 @@ var SWIndexer = {
     if (prev && prev.hash === info.hash) {
       return;
     }
-    var tf = await this.termFreqInBackground(info.content);
-    if (this._stopped) return;
-    var weak = info.weak;
-    if (!weak && tf.size < SWPref("minFulltextTerms", 25)) {
-      var meta = this.metadataText(item);
-      if (meta && meta.hash !== info.hash) {
-        info = meta;
-        tf = SWTokenizer.termFreq(info.content, {
-          minLength: SWPref("minTokenLength", 2),
-        });
-      }
-      weak = true;
-    }
-    await this.corpus.upsertDoc(key, info.hash, weak, tf);
+    await this.corpus.yieldToForeground();
+    const tf = await SWSearch.extract(
+      {
+        title: item.getField("title"),
+        abstract: item.getField("abstractNote"),
+        body: info.weak ? "" : info.content,
+      },
+      async () => {
+        await swYield(foreground ? 5 : 80);
+        await this.corpus.yieldToForeground();
+      },
+      () => this._stopped,
+    );
+    if (!tf || this._stopped) return;
+    var weak = info.weak || tf.size < SWPref("minFulltextTerms", 25);
+    await this.corpus._upsertDoc(key, info.hash, weak, tf);
   },
 
   async termFreqInBackground(text) {
@@ -299,7 +342,10 @@ var SWIndexer = {
         tf.set(token, (tf.get(token) || 0) + 1);
       }
       offset = end;
-      if (offset < text.length) await swYield(20);
+      if (offset < text.length) {
+        await swYield(80);
+        await this.corpus.yieldToForeground();
+      }
     }
     return tf;
   },
@@ -352,16 +398,6 @@ var SWIndexer = {
 
       var path = fulltext.getItemCacheFile(att).path;
       var have = await IOUtils.exists(path);
-      if (!have && mime === "text/plain") {
-        var indexed = Number(
-          await Zotero.DB.valueQueryAsync(
-            "SELECT indexedChars FROM fulltextItems WHERE itemID=?",
-            [att.id],
-          ),
-        );
-        path = indexed > 0 ? await att.getFilePathAsync() : null;
-        if (path) have = await IOUtils.exists(path);
-      }
       if (
         !have &&
         SWPref("requestMissingFulltext", false) &&
@@ -376,28 +412,25 @@ var SWIndexer = {
       }
       if (have) this._requestedFulltext.delete(att.id);
       var stat = await IOUtils.stat(path);
-      var hash =
-        "f" +
-        att.key +
-        ":" +
-        stat.lastModified +
-        ":" +
-        stat.size +
-        (mime === "text/plain" ? ":" + (indexed || 0) : "");
+      var hash = "f" + att.key + ":" + stat.lastModified + ":" + stat.size;
       var parent = att.parentItemID
         ? await Zotero.Items.getAsync(att.parentItemID)
         : att;
+      if (parent)
+        hash +=
+          ":v2:" +
+          SWTokenizer.swFnv1a(
+            String(parent.getField("title") || "") +
+              "\n" +
+              String(parent.getField("abstractNote") || ""),
+          );
       if (parent && this.corpus.docs.get(this.docKey(parent))?.hash === hash) {
         return { content: "", hash, weak: false };
       }
       var buf = await IOUtils.read(path, {
         maxBytes: SWPref("maxTextChars", 1200000),
       });
-      var content = new TextDecoder(
-        mime === "text/plain" ? att.attachmentCharset || "utf-8" : "utf-8",
-      ).decode(buf);
-      if (mime === "text/plain" && indexed > 0)
-        content = content.slice(0, indexed);
+      var content = new TextDecoder("utf-8").decode(buf);
       if (!content || content.trim().length < 40) {
         return null;
       }
@@ -434,19 +467,24 @@ var SWIndexer = {
     var content = parts.join("\n");
     return {
       content: content,
-      hash: "m" + SWTokenizer.swFnv1a(content),
+      hash: "m2" + SWTokenizer.swFnv1a(content),
       weak: true,
     };
   },
 
-  async shutdown() {
+  requestStop() {
     this._stopped = true;
+    if (this.corpus) this.corpus._stopped = true;
     if (this._notifierID) {
       Zotero.Notifier.unregisterObserver(this._notifierID);
       this._notifierID = null;
     }
     this._queue = [];
     this._queued.clear();
+  },
+
+  async shutdown() {
+    this.requestStop();
     await Promise.allSettled(Array.from(this._pendingRemovals));
     await this._scanPromise;
     await this._drainPromise;

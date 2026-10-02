@@ -280,7 +280,8 @@ var SWSection = {
     if (!compute) await swYield(120);
     if (body._swToken !== token || this._stopped || sectionEl?.open === false)
       return;
-    await SWIndexer.ensureNow(item);
+    if (compute) await SWIndexer.ensureNow(item);
+    else await SWIndexer.ensureForDisplay(item);
     if (body._swToken !== token) {
       return;
     }
@@ -302,6 +303,22 @@ var SWSection = {
     }
 
     if (!compute && corpus.recommendationsFresh(cached, docKey)) return;
+    // Coalesce corpus changes instead of repeatedly scoring during a bulk import.
+    if (!compute && cached) {
+      const waitingSince = Date.now();
+      while (
+        Date.now() - corpus.lastChangedAt < 2500 &&
+        Date.now() - waitingSince < 5000
+      ) {
+        await swYield(250);
+        if (
+          this._stopped ||
+          body._swToken !== token ||
+          sectionEl?.open === false
+        )
+          return;
+      }
+    }
     progressBar = body.querySelector(".sw-computation-progress");
     computingText = await this.fmt(
       doc,
@@ -313,12 +330,13 @@ var SWSection = {
     this.setStatus(body, computingText, false);
     body.setAttribute("aria-busy", "true");
     progressBar.hidden = !!cached && !compute;
+    var epoch = corpus.search.epoch;
     var revision = corpus.revision;
     var queryHash = corpus.docs.get(docKey).hash;
     var lastProgress = 0;
     var matches = await corpus.scoreTopKAsync(
       docKey,
-      100,
+      50,
       (key, d) =>
         key.startsWith(target.libraryID + "/") && (includeWeak || !d.weak),
       () =>
@@ -334,6 +352,12 @@ var SWSection = {
           false,
         );
       },
+      30,
+      (currentRevision, currentHash, currentEpoch) => {
+        epoch = currentEpoch;
+        revision = currentRevision;
+        queryHash = currentHash;
+      },
     );
     if (body._swToken !== token) {
       return;
@@ -346,6 +370,7 @@ var SWSection = {
       matches,
       revision,
       queryHash,
+      epoch,
     );
     if (body._swToken !== token || this._stopped) return;
     await this._presentMatches(props, matches, docKey, token);

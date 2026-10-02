@@ -6,6 +6,7 @@ export const requiredFiles = [
   "THIRD-PARTY-NOTICES",
   "src/stemmer.js",
   "src/tokenizer.js",
+  "src/search.js",
   "src/corpus.js",
   "src/indexer.js",
   "src/section.js",

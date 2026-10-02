@@ -12,7 +12,7 @@ function fixture({ failure = false, deferred = false } = {}) {
       })
     : Promise.resolve();
   const state = {
-    loads: 0,
+    loads: [],
     starts: 0,
     registered: 0,
     closed: 0,
@@ -37,7 +37,7 @@ function fixture({ failure = false, deferred = false } = {}) {
     Services: {
       scriptloader: {
         loadSubScript(_uri, scope) {
-          state.loads++;
+          state.loads.push(_uri);
           scope.SWIndexer = {
             corpus,
             start: async () => state.starts++,
@@ -66,7 +66,9 @@ function fixture({ failure = false, deferred = false } = {}) {
 test("repeated startup and shutdown register and close once", async () => {
   const h = fixture();
   await Promise.all([h.context.startup(h.data), h.context.startup(h.data)]);
-  assert.equal(h.state.loads, 5);
+  assert.equal(h.state.loads.length, 6);
+  assert.equal(new Set(h.state.loads).size, 6);
+  assert.ok(h.state.loads.some((uri) => uri.endsWith("search.js")));
   assert.equal(h.state.starts, 1);
   assert.equal(h.state.registered, 1);
   assert.deepEqual(h.state.injected, ["first", "second"]);
@@ -93,4 +95,16 @@ test("shutdown during initialization waits and prevents late UI registration", a
   assert.equal(h.state.registered, 0);
   assert.equal(h.state.injected.length, 0);
   assert.equal(h.state.closed, 1);
+});
+
+test("application quit cancels work without waiting for pending startup or storage", async () => {
+  const h = fixture({ deferred: true });
+  h.context.APP_SHUTDOWN = 2;
+  const starting = h.context.startup(h.data);
+  await new Promise((r) => setImmediate(r));
+  await h.context.shutdown(h.data, 2);
+  assert.equal(h.state.closed, 0);
+  h.resolve();
+  await starting;
+  assert.equal(h.state.registered, 0);
 });

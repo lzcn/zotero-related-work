@@ -27,6 +27,7 @@ export default [
       globals: Object.fromEntries(
         [
           "Zotero",
+          "APP_SHUTDOWN",
           "Services",
           "ChromeUtils",
           "IOUtils",
@@ -36,6 +37,7 @@ export default [
           "clearTimeout",
           "pref",
           "module",
+          "SWSearch",
           "SWCorpus",
           "SWIndexer",
           "SWTokenizer",

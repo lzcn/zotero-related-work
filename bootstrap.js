@@ -28,6 +28,7 @@ async function start({ id, version, rootURI }, token) {
     var files = [
       "stemmer.js",
       "tokenizer.js",
+      "search.js",
       "corpus.js",
       "indexer.js",
       "section.js",
@@ -59,7 +60,13 @@ async function releaseResources() {
   if (SWScope.SWIndexer?.corpus) await SWScope.SWIndexer.corpus.close();
 }
 
-async function shutdown() {
+async function shutdown(data, reason) {
+  SWReady = false;
+  ++SWGeneration;
+  SWScope.SWSection?.shutdown();
+  SWScope.SWIndexer?.requestStop?.();
+  // Zotero owns process-wide storage teardown. Do not hold quit open for scans.
+  if (typeof APP_SHUTDOWN !== "undefined" && reason === APP_SHUTDOWN) return;
   if (SWShutdownPromise) return SWShutdownPromise;
   SWShutdownPromise = (async () => {
     SWReady = false;

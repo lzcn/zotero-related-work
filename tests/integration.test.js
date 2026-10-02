@@ -139,7 +139,14 @@ function harness() {
       stat: async (p) => ({ lastModified: 1, size: files.get(p).length }),
     },
   });
-  for (const file of ["stemmer", "tokenizer", "corpus", "indexer", "section"]) {
+  for (const file of [
+    "stemmer",
+    "tokenizer",
+    "search",
+    "corpus",
+    "indexer",
+    "section",
+  ]) {
     vm.runInContext(
       fs.readFileSync(path.join(__dirname, "../src/" + file + ".js"), "utf8"),
       context,
@@ -148,6 +155,7 @@ function harness() {
   const corpus = vm.runInContext("new SWCorpus()", context);
   corpus._ready = Promise.resolve();
   corpus.progress.phase = "ready";
+  corpus.search.epoch = 1;
   context.SWIndexer.corpus = corpus;
   function item(id, title, parentItemID, libraryID = 1) {
     const it = {
@@ -374,6 +382,11 @@ test("opening computes once; fresh cache is reused; stale cache stays visible du
   await h.SWSection.renderBody(props, true);
   assert.equal(calculations, 2, "explicit refresh bypasses cache");
   await h.SWIndexer.processItem(h.item(3, "machine learning algorithm"));
+  await h.SWSection.renderBody(props);
+  assert.equal(calculations, 2, "reverse update avoids a full recalculation");
+  assert.equal(h.body.querySelectorAll(".sw-row").length, 2);
+  const cached = await h.corpus.getRecommendations("1/KEY1", true);
+  cached.computedAt -= 25 * 60 * 60 * 1000;
   let release;
   h.corpus.scoreTopKAsync = async (...args) => {
     calculations++;
@@ -396,7 +409,7 @@ test("opening computes once; fresh cache is reused; stale cache stays visible du
   assert.equal(h.body.querySelectorAll(".sw-row").length, 2);
 });
 
-test("database recommendations survive restart; changed revisions and age invalidate freshness", async () => {
+test("database recommendations survive restart; neighbor changes and age invalidate freshness", async () => {
   const h = harness(),
     payloads = new Map();
   h.corpus._db = {
@@ -406,6 +419,12 @@ test("database recommendations survive restart; changed revisions and age invali
     async execute(sql, args) {
       if (sql.startsWith("INSERT OR REPLACE INTO recommendations"))
         payloads.set(args[0], args[1]);
+      if (sql.startsWith("UPDATE recommendations SET payload"))
+        payloads.set(args[1], args[0]);
+      if (sql.startsWith("SELECT cacheKey, payload"))
+        return [...payloads].map(([cacheKey, payload]) => ({
+          getResultByName: (name) => ({ cacheKey, payload })[name],
+        }));
       if (sql.startsWith("SELECT payload"))
         return payloads.has(args[0])
           ? [{ getResultByName: () => payloads.get(args[0]) }]
@@ -433,9 +452,17 @@ test("database recommendations survive restart; changed revisions and age invali
   cached.computedAt -= 25 * 60 * 60 * 1000;
   assert.equal(h.corpus.recommendationsFresh(cached, "1/A"), false);
   cached.computedAt = Date.now();
+  await h.corpus.upsertDoc("1/C", "c", false, new Map([["unrelated", 1]]));
+  assert.equal(h.corpus.recommendationsFresh(cached, "1/A"), true);
   const revision = h.corpus.revision;
   await h.corpus.upsertDoc("1/B", "b", false, new Map([["learning", 1]]));
   assert.equal(h.corpus.recommendationsFresh(cached, "1/A"), false);
+  h.corpus._recommendations.clear();
+  assert.equal(
+    (await h.corpus.getRecommendations("1/A", true)).dirty,
+    true,
+    "neighbor invalidation survives restart",
+  );
   await h.corpus.saveRecommendations("1/A", true, [], revision, "a");
   assert.equal(
     (await h.corpus.getRecommendations("1/A", true)).matches.length,
@@ -481,6 +508,8 @@ test("SQLite persists source modification times and vector revisions without sco
     timestamps = new Map(),
     sources = new Map(),
     sqls = [];
+  const counts = new Map();
+  h.corpus.search.epoch = 1;
   let revision = 0,
     transactions = 0;
   h.corpus._db = {
@@ -490,6 +519,12 @@ test("SQLite persists source modification times and vector revisions without sco
     },
     async execute(sql, args) {
       sqls.push(sql);
+      if (sql.startsWith("INSERT OR REPLACE INTO fingerprints"))
+        counts.set(args[0], args[1]);
+      if (sql.startsWith("SELECT counts FROM fingerprints"))
+        return counts.has(args[0])
+          ? [{ getResultByName: () => counts.get(args[0]) }]
+          : [];
       if (sql.includes("'corpusRevision', ?")) revision = Number(args[0]);
       if (sql.startsWith("INSERT OR REPLACE INTO doc_updates"))
         timestamps.set(args[0], args[1]);
@@ -523,7 +558,7 @@ test("SQLite persists source modification times and vector revisions without sco
     new Map([["learning", 3]]),
   );
   assert.equal(revision, 2);
-  assert.ok(sqls.every((sql) => !sql.includes("recommendations")));
+  assert.ok(sqls.some((sql) => sql.includes("fingerprints")));
 });
 
 test("K validation, identical document scores, and registered pane cleanup", async () => {
@@ -547,7 +582,7 @@ test("K validation, identical document scores, and registered pane cleanup", asy
   assert.equal(h.Zotero.unregistered, "namespaced-pane");
 });
 
-test("TXT uses only Zotero-indexed characters and concurrent attachment renders stay canonical", async () => {
+test("TXT uses Zotero cache and concurrent attachment renders stay canonical", async () => {
   const h = harness(),
     parent = h.item(1, "machine learning"),
     att = h.item(2, "text file", 1);
@@ -556,6 +591,11 @@ test("TXT uses only Zotero-indexed characters and concurrent attachment renders 
   h.files.set(
     "/plain.txt",
     "machine neural learning ".repeat(10) + "unindexedending",
+  );
+  assert.equal(await h.SWIndexer.attachmentText(att), null);
+  h.files.set(
+    "/cache/KEY2",
+    "machine neural learning ".repeat(10).slice(0, 50),
   );
   const text = await h.SWIndexer.attachmentText(att);
   assert.equal(text.content.length, 50);
@@ -695,7 +735,7 @@ test("online similarity reports completed candidate progress and obeys cancellat
   assert.equal(matches.length, 3);
   assert.deepEqual(JSON.parse(JSON.stringify(progress[0])), {
     done: 0,
-    total: 3,
+    total: 0,
   });
   assert.deepEqual(JSON.parse(JSON.stringify(progress.at(-1))), {
     done: 3,
@@ -735,16 +775,87 @@ test("sparse candidate pruning preserves cosine scores and tracks replaced terms
     ]),
   );
   await h.corpus.upsertDoc("1/C", "c", false, new Map([["delta", 4]]));
-  const weight = (t, c) => (1 + Math.log(c)) * h.corpus.idf(t);
-  const expected =
-    (weight("alpha", 2) * weight("alpha", 1)) /
-    (Math.hypot(weight("alpha", 2), weight("beta", 1)) *
-      Math.hypot(weight("alpha", 1), weight("gamma", 3)));
+  const expected = h.context.SWSearch.cosine(
+    h.corpus.search.docs.get("1/A").vector,
+    h.corpus.search.docs.get("1/B").vector,
+  );
   const matches = h.corpus.scoreTopK("1/A", 10);
   assert.equal(matches.length, 1);
   assert.ok(Math.abs(matches[0].score - expected) < 1e-12);
   await h.corpus.upsertDoc("1/B", "b2", false, new Map([["delta", 1]]));
   assert.equal(h.corpus.scoreTopK("1/A", 10).length, 0);
   await h.corpus.removeDoc("1/C");
-  assert.equal(h.corpus._postings.get("delta").size, 1);
+  assert.equal(
+    h.corpus.search.postings.get(h.context.SWSearch.hash("w:delta")).length,
+    1,
+  );
+});
+
+test("opening the section never reads full text on the foreground path", async () => {
+  const h = harness(),
+    q = h.item(1, "machine learning"),
+    a = h.item(2, "machine learning");
+  h.prefs.set("similar-works.backgroundIndexing", false);
+  await h.SWIndexer.processItem(a);
+  h.SWIndexer.extractText = () => {
+    throw new Error("Foreground full-text indexing is forbidden");
+  };
+  await h.SWSection.renderBody({ body: h.body, item: q });
+  assert.equal(h.corpus.docs.get("1/KEY1").weak, true);
+  assert.equal(h.body.querySelectorAll(".sw-row").length, 1);
+  assert.equal(h.errors.length, 0);
+});
+
+test("async pruning preserves scores and never visits disjoint document vectors", async () => {
+  const h = harness();
+  await h.corpus.upsertDoc("1/A", "a", false, new Map([["shared", 2]]));
+  await h.corpus.upsertDoc(
+    "1/B",
+    "b",
+    false,
+    new Map([
+      ["shared", 1],
+      ["extra", 1],
+    ]),
+  );
+  await h.corpus.upsertDoc("1/C", "c", false, new Map([["unrelated", 1]]));
+  const reference = JSON.stringify(h.corpus.scoreTopK("1/A", 10));
+  h.corpus.docs.get("1/C").tf = new Proxy(new Map(), {
+    get() {
+      throw new Error("Disjoint vector visited");
+    },
+  });
+  const progress = [];
+  assert.equal(
+    JSON.stringify(
+      await h.corpus.scoreTopKAsync(
+        "1/A",
+        10,
+        undefined,
+        () => false,
+        (p) => progress.push(p),
+      ),
+    ),
+    reference,
+  );
+  assert.equal(progress.at(-1).total, 1);
+});
+
+test("foreground tasks interrupt background work only at safe batch boundaries", async () => {
+  const h = harness(),
+    order = [];
+  let unblock;
+  const background = h.corpus.runTask(async () => {
+    order.push("index-start");
+    await new Promise((r) => (unblock = r));
+    await h.corpus.yieldToForeground();
+    order.push("index-end");
+  });
+  const ordinary = h.corpus.runTask(() => order.push("next-index"));
+  const foreground = h.corpus.runTask(() => order.push("query"), 1);
+  unblock();
+  await Promise.all([background, ordinary, foreground]);
+  assert.deepEqual(order, ["index-start", "query", "index-end", "next-index"]);
+  h.corpus._stopped = true;
+  assert.equal((await h.corpus.scoreTopKAsync("1/A", 10)).length, 0);
 });

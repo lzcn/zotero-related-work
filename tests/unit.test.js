@@ -1,5 +1,6 @@
 global.swPorterStem = require("../src/stemmer.js").swPorterStem;
 const tok = require("../src/tokenizer.js");
+global.SWSearch = require("../src/search.js").SWSearch;
 const { SWCorpus } = require("../src/corpus.js");
 
 let passed = 0;

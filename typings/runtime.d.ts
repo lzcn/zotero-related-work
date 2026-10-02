@@ -1,3 +1,4 @@
+declare const SWSearch: typeof import("../src/search").SWSearch;
 declare const SWPlugin: { id: string; version: string; rootURI: string };
 declare const module: { exports: unknown };
 declare const SWCorpus: typeof import("../src/corpus").SWCorpus;
@@ -15,4 +16,10 @@ declare namespace Zotero {
     getItemCacheFile(item: Item): { path: string };
     queueItem(item: Item): Promise<void>;
   };
+}
+
+declare const APP_SHUTDOWN: number;
+
+interface SWIdleDatabase {
+  onIdle(work: () => Promise<unknown>): void;
 }

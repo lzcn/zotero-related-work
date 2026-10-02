@@ -1,0 +1,578 @@
+// Compact document fingerprints and bounded search. No Zotero database access.
+var SWSearch = (() => {
+  const SIGNATURE_SIZE = 256,
+    QUERY_TERMS = 48,
+    CANDIDATES = 300,
+    BLOCK_SIZE = 128;
+  function hash(text, seed = 2166136261) {
+    let h = seed;
+    for (let i = 0; i < text.length; i++)
+      h = Math.imul(h ^ text.charCodeAt(i), 16777619);
+    h ^= h >>> 16;
+    h = Math.imul(h, 0x85ebca6b);
+    h ^= h >>> 13;
+    h = Math.imul(h, 0xc2b2ae35);
+    return (h ^ (h >>> 16)) >>> 0;
+  }
+  function clean(text) {
+    text = String(text || "")
+      .normalize("NFKC")
+      .toLowerCase();
+    const heading =
+      /(?:^|\n)\s*(?:references|bibliography|参考文献)\s*(?:\n|$)/g;
+    for (const m of text.matchAll(heading))
+      if (m.index > text.length * 0.6) {
+        text = text.slice(0, m.index);
+        break;
+      }
+    const lines = text.split("\n"),
+      repeated = new Map();
+    for (const line of lines) {
+      const s = line.trim();
+      if (s.length > 5 && s.length < 100)
+        repeated.set(s, (repeated.get(s) || 0) + 1);
+    }
+    return lines
+      .filter((line) => (repeated.get(line.trim()) || 0) < 4)
+      .join("\n")
+      .replace(/https?:\/\/\S+|\b10\.\d{4,9}\/[^\s]+/g, " ")
+      .replace(/([a-z])-\s*\n\s*([a-z])/g, "$1$2");
+  }
+  function* features(text) {
+    let previous = "";
+    for (const match of text.matchAll(
+      /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]+|[\p{L}\p{N}]+/gu,
+    )) {
+      const word = match[0];
+      if (
+        /^[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]+$/u.test(
+          word,
+        )
+      ) {
+        previous = "";
+        const chars = Array.from(word);
+        for (const n of [2, 3])
+          for (let i = 0; i + n <= chars.length; i++)
+            yield hash(`c:${chars.slice(i, i + n).join("")}`);
+      } else {
+        if (
+          word.length < 2 ||
+          /^\d+$/.test(word) ||
+          SWTokenizer.termFreq(word).size === 0
+        ) {
+          previous = "";
+          continue;
+        }
+        const token = /^[a-z]+$/.test(word) ? swPorterStem(word) : word;
+        yield hash(`w:${token}`);
+        if (previous) yield hash(`b:${previous} ${token}`);
+        previous = token;
+      }
+    }
+  }
+  async function extract(
+    fields,
+    pause = async () => {},
+    cancelled = () => false,
+  ) {
+    const counts = new Map();
+    let operations = 0;
+    for (const [text, multiplier] of [
+      [fields.title, 4],
+      [fields.abstract, 2],
+      [fields.body, 1],
+    ]) {
+      for (const feature of features(clean(text))) {
+        counts.set(feature, (counts.get(feature) || 0) + multiplier);
+        if (++operations % 2000 === 0) {
+          await pause();
+          if (cancelled()) return null;
+        }
+        if (operations >= 100000) return counts;
+      }
+    }
+    return counts;
+  }
+  function encodeCounts(counts) {
+    const bytes = new Uint8Array(counts.size * 8),
+      view = new DataView(bytes.buffer);
+    let i = 0;
+    for (const [feature, count] of counts) {
+      view.setUint32(i, feature, true);
+      view.setFloat32(i + 4, count, true);
+      i += 8;
+    }
+    return bytes;
+  }
+  function decodeCounts(data) {
+    const bytes = new Uint8Array(data),
+      view = new DataView(bytes.buffer),
+      counts = new Map();
+    if (bytes.length % 8) throw new Error("Invalid feature counts");
+    for (let i = 0; i < bytes.length; i += 8) {
+      const count = view.getFloat32(i + 4, true);
+      if (!(count > 0) || !Number.isFinite(count))
+        throw new Error("Invalid feature count");
+      counts.set(view.getUint32(i, true), count);
+    }
+    return counts;
+  }
+  class Heap {
+    constructor(limit) {
+      this.limit = limit;
+      this.items = [];
+    }
+    get threshold() {
+      return this.items.length < this.limit ? 0 : this.items[0][1];
+    }
+    // Equal-score ties favor smaller identifiers, consistently with WAND.
+    less(a, b) {
+      return a[1] < b[1] || (a[1] === b[1] && a[0] > b[0]);
+    }
+    add(pair) {
+      if (!this.limit) return;
+      if (this.items.length < this.limit) {
+        this.items.push(pair);
+        let i = this.items.length - 1;
+        while (i) {
+          const p = (i - 1) >>> 1;
+          if (!this.less(this.items[i], this.items[p])) break;
+          [this.items[i], this.items[p]] = [this.items[p], this.items[i]];
+          i = p;
+        }
+      } else if (this.less(this.items[0], pair)) {
+        this.items[0] = pair;
+        let i = 0;
+        while (true) {
+          let j = i * 2 + 1;
+          if (j >= this.items.length) break;
+          if (
+            j + 1 < this.items.length &&
+            this.less(this.items[j + 1], this.items[j])
+          )
+            j++;
+          if (!this.less(this.items[j], this.items[i])) break;
+          [this.items[i], this.items[j]] = [this.items[j], this.items[i]];
+          i = j;
+        }
+      }
+    }
+    sorted() {
+      return [...this.items].sort((a, b) => b[1] - a[1] || a[0] - b[0]);
+    }
+  }
+  function simhash(counts) {
+    const sums = new Float64Array(64);
+    for (const [id, count] of counts) {
+      const bits = [hash(String(id), 0x811c9dc5), hash(String(id), 0x9e3779b9)],
+        weight = 1 + Math.log(count);
+      for (let i = 0; i < 64; i++)
+        sums[i] += (bits[i >>> 5] >>> (i & 31)) & 1 ? weight : -weight;
+    }
+    const result = new Uint32Array(2);
+    for (let i = 0; i < 64; i++)
+      if (sums[i] > 0)
+        result[i >>> 5] = (result[i >>> 5] | (1 << (i & 31))) >>> 0;
+    return result;
+  }
+  function encodeSimhash(sim) {
+    const bytes = new Uint8Array(8),
+      view = new DataView(bytes.buffer);
+    view.setUint32(0, sim[0], true);
+    view.setUint32(4, sim[1], true);
+    return bytes;
+  }
+  function decodeSimhash(data) {
+    const bytes = new Uint8Array(data);
+    if (bytes.length !== 8) throw new Error("Invalid SimHash");
+    const view = new DataView(bytes.buffer);
+    return new Uint32Array([view.getUint32(0, true), view.getUint32(4, true)]);
+  }
+  function distance(a, b) {
+    let result = 0;
+    for (let i = 0; i < 2; i++) {
+      let bits = (a[i] ^ b[i]) >>> 0;
+      while (bits) {
+        bits = (bits & (bits - 1)) >>> 0;
+        result++;
+      }
+    }
+    return result;
+  }
+  function encodeSignature(vector) {
+    const data = new Uint8Array(vector.length * 6),
+      view = new DataView(data.buffer);
+    vector.forEach(([id, weight], i) => {
+      view.setUint32(i * 6, id, true);
+      view.setUint16(i * 6 + 4, Math.max(1, Math.round(weight * 65535)), true);
+    });
+    return data;
+  }
+  class Vector {
+    constructor(pairs) {
+      this.ids = new Uint32Array(pairs.map((p) => p[0]));
+      this.weights = new Float64Array(pairs.map((p) => p[1]));
+      this.length = pairs.length;
+    }
+    *[Symbol.iterator]() {
+      for (let i = 0; i < this.length; i++)
+        yield [this.ids[i], this.weights[i]];
+    }
+    forEach(fn) {
+      let i = 0;
+      for (const pair of this) fn(pair, i++);
+    }
+    reduce(fn, initial) {
+      let value = initial;
+      for (const pair of this) value = fn(value, pair);
+      return value;
+    }
+  }
+  function decodeSignature(data) {
+    const bytes = new Uint8Array(data),
+      view = new DataView(bytes.buffer),
+      vector = [];
+    let sum = 0,
+      previous = -1;
+    if (bytes.length % 6 || bytes.length > SIGNATURE_SIZE * 6)
+      throw new Error("Invalid signature");
+    for (let i = 0; i < bytes.length; i += 6) {
+      const id = view.getUint32(i, true),
+        weight = view.getUint16(i + 4, true) / 65535;
+      if (id <= previous || !weight)
+        throw new Error("Invalid signature feature");
+      previous = id;
+      vector.push([id, weight]);
+      sum += weight * weight;
+    }
+    const norm = Math.sqrt(sum);
+    return new Vector(vector.map(([id, w]) => [id, w / norm]));
+  }
+  function cosine(a, b) {
+    let i = 0,
+      j = 0,
+      sum = 0;
+    while (i < a.length && j < b.length) {
+      if (a.ids[i] === b.ids[j]) {
+        sum += a.weights[i++] * b.weights[j++];
+      } else if (a.ids[i] < b.ids[j]) i++;
+      else j++;
+    }
+    return Math.min(1, Math.max(0, sum));
+  }
+  function seek(entries, target, from = 0) {
+    let hi = entries.length,
+      lo = from;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if (entries.ids[mid] < target) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo;
+  }
+  class Posting {
+    constructor() {
+      this.ids = new Uint32Array(4);
+      this.weights = new Float64Array(4);
+      this.length = 0;
+      this.blocks = new Map();
+      this.max = 0;
+    }
+    insert(id, weight) {
+      const at = seek(this, id);
+      if (this.length === this.ids.length) {
+        const ids = new Uint32Array(this.length * 2),
+          weights = new Float64Array(this.length * 2);
+        ids.set(this.ids);
+        weights.set(this.weights);
+        this.ids = ids;
+        this.weights = weights;
+      }
+      this.ids.copyWithin(at + 1, at, this.length);
+      this.weights.copyWithin(at + 1, at, this.length);
+      this.ids[at] = id;
+      this.weights[at] = weight;
+      this.length++;
+      const block = Math.floor(id / BLOCK_SIZE);
+      this.blocks.set(block, Math.max(this.blocks.get(block) || 0, weight));
+      this.max = Math.max(this.max, weight);
+    }
+    remove(id) {
+      const at = seek(this, id);
+      if (this.ids[at] !== id || at >= this.length) return;
+      this.ids.copyWithin(at, at + 1, this.length);
+      this.weights.copyWithin(at, at + 1, this.length);
+      this.length--;
+      // Bounds may overestimate after deletion, which is safe. Epoch rebuilds compact them.
+    }
+  }
+  class Index {
+    constructor() {
+      this.docs = new Map();
+      this.byID = new Map();
+      this.postings = new Map();
+      this.df = new Map();
+      this.frozenDF = new Map();
+      this.epochN = 0;
+      this.averageLength = 1;
+      this.epoch = 0;
+      this.changes = 0;
+      this.nextID = 1;
+    }
+    counts(tf) {
+      const result = new Map();
+      for (const [term, count] of tf) {
+        const id =
+          typeof term === "number"
+            ? term
+            : hash(
+                `${/^[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]+$/u.test(term) ? "c" : "w"}:${term}`,
+              );
+        if (Number.isFinite(count) && count > 0)
+          result.set(id, (result.get(id) || 0) + count);
+      }
+      return result;
+    }
+    fingerprint(counts) {
+      const length = [...counts.values()].reduce((a, b) => a + b, 0),
+        top = new Heap(SIGNATURE_SIZE);
+      const denominator = 1.2 * (0.25 + (0.75 * length) / this.averageLength);
+      for (const [id, count] of counts) {
+        const df = Math.min(this.epochN, this.frozenDF.get(id) || 0);
+        const idf = Math.log(1 + (this.epochN - df + 0.5) / (df + 0.5));
+        top.add([id, (idf * count * 2.2) / (count + denominator)]);
+      }
+      const weighted = top.sorted(),
+        norm = Math.sqrt(weighted.reduce((s, p) => s + p[1] * p[1], 0));
+      return decodeSignature(
+        encodeSignature(
+          weighted.map(([id, w]) => [id, w / norm]).sort((a, b) => a[0] - b[0]),
+        ),
+      );
+    }
+    _post(doc, insert) {
+      for (const [term, weight] of doc.vector) {
+        let posting = this.postings.get(term);
+        if (!posting) {
+          if (!insert) continue;
+          posting = new Posting();
+          this.postings.set(term, posting);
+        }
+        if (insert) posting.insert(doc.id, weight);
+        else posting.remove(doc.id);
+        if (!posting.length) this.postings.delete(term);
+      }
+    }
+    remove(key, storedCounts = null) {
+      const old = this.docs.get(key);
+      if (!old) return;
+      this._post(old, false);
+      for (const feature of decodeCounts(old.counts || storedCounts).keys()) {
+        const n = this.df.get(feature) - 1;
+        if (n) this.df.set(feature, n);
+        else this.df.delete(feature);
+      }
+      this.docs.delete(key);
+      this.byID.delete(old.id);
+      this.changes++;
+    }
+    add(key, tf, weak, signature = null, sim = null) {
+      const old = this.docs.get(key),
+        id = old?.id || this.nextID++;
+      if (old) this.remove(key);
+      const counts = this.counts(tf);
+      for (const feature of counts.keys())
+        this.df.set(feature, (this.df.get(feature) || 0) + 1);
+      const doc = {
+        key,
+        id,
+        weak,
+        counts: encodeCounts(counts),
+        length: [...counts.values()].reduce((a, b) => a + b, 0),
+        vector: signature
+          ? decodeSignature(signature)
+          : this.fingerprint(counts),
+        simhash: sim ? new Uint32Array(sim) : simhash(counts),
+      };
+      this.docs.set(key, doc);
+      this.byID.set(id, doc);
+      this._post(doc, true);
+      this.changes++;
+      return doc;
+    }
+    needsEpoch() {
+      return (
+        !this.epoch ||
+        this.changes >=
+          Math.min(500, Math.max(50, Math.ceil(this.epochN * 0.05)))
+      );
+    }
+    async rebuild(
+      pause = async () => {},
+      cancelled = () => false,
+      loadCounts = async (doc) => doc.counts,
+    ) {
+      // Run inside the corpus queue: no reader can mix old and new IDF weights.
+      const startingChanges = this.changes;
+      const df = new Map(this.df),
+        n = this.docs.size;
+      const average =
+        [...this.docs.values()].reduce((s, d) => s + d.length, 0) /
+          Math.max(1, n) || 1;
+      const generator = new Index();
+      generator.frozenDF = df;
+      generator.epochN = n;
+      generator.averageLength = average;
+      const vectors = new Map();
+      let i = 0;
+      for (const doc of this.docs.values()) {
+        if (cancelled() || this.changes !== startingChanges) return false;
+        vectors.set(
+          doc.key,
+          generator.fingerprint(decodeCounts(await loadCounts(doc))),
+        );
+        if (++i % 5 === 0) {
+          await pause();
+          if (cancelled() || this.changes !== startingChanges) return false;
+        }
+      }
+      if (cancelled() || this.changes !== startingChanges) return false;
+      const staged = new Index();
+      let built = 0;
+      for (const doc of this.docs.values()) {
+        const next = { ...doc, vector: vectors.get(doc.key) };
+        staged.docs.set(doc.key, next);
+        staged.byID.set(doc.id, next);
+        staged._post(next, true);
+        if (++built % 5 === 0) {
+          await pause();
+          if (cancelled() || this.changes !== startingChanges) return false;
+        }
+      }
+      // Publish complete vectors and postings together; foreground reads see one epoch.
+      this.frozenDF = df;
+      this.epochN = n;
+      this.averageLength = average;
+      this.docs = staged.docs;
+      this.byID = staged.byID;
+      this.postings = staged.postings;
+      this.epoch++;
+      this.changes = 0;
+      return true;
+    }
+    async retrieve(query, filter, pause, cancelled) {
+      const top = new Heap(QUERY_TERMS);
+      for (const pair of query.vector) top.add(pair);
+      let cursors = top.sorted().flatMap(([term, weight]) => {
+        const p = this.postings.get(term);
+        return p ? [{ p, weight, at: 0 }] : [];
+      });
+      const heap = new Heap(CANDIDATES);
+      let operations = 0,
+        sliceStarted = Date.now();
+      while (cursors.length) {
+        if (cancelled()) return [];
+        cursors.sort((a, b) => a.p.ids[a.at] - b.p.ids[b.at]);
+        let bound = 0,
+          pivot = -1;
+        for (let i = 0; i < cursors.length; i++) {
+          bound += cursors[i].p.max * cursors[i].weight;
+          if (bound + 1e-12 >= heap.threshold) {
+            pivot = i;
+            break;
+          }
+        }
+        if (pivot < 0) break;
+        const id = cursors[pivot].p.ids[cursors[pivot].at];
+        if (cursors[0].p.ids[cursors[0].at] === id) {
+          const end = (Math.floor(id / BLOCK_SIZE) + 1) * BLOCK_SIZE - 1;
+          let blockBound = 0;
+          for (const c of cursors)
+            if (c.p.ids[c.at] <= end)
+              blockBound +=
+                (c.p.blocks.get(Math.floor(id / BLOCK_SIZE)) || 0) * c.weight;
+          if (blockBound + 1e-12 < heap.threshold) {
+            for (const c of cursors) c.at = seek(c.p, end + 1, c.at);
+          } else {
+            let score = 0;
+            for (const c of cursors)
+              if (c.p.ids[c.at] === id) {
+                score += c.p.weights[c.at] * c.weight;
+                c.at++;
+              }
+            const doc = this.byID.get(id);
+            if (doc && doc !== query && (!filter || filter(doc.key, doc)))
+              heap.add([id, score, doc.key]);
+          }
+        } else
+          for (let i = 0; i < pivot; i++)
+            cursors[i].at = seek(cursors[i].p, id, cursors[i].at);
+        cursors = cursors.filter((c) => c.at < c.p.length);
+        if (++operations % 128 === 0 && Date.now() - sliceStarted >= 6) {
+          await pause();
+          sliceStarted = Date.now();
+        }
+      }
+      return heap.sorted().map((pair) => pair[2]);
+    }
+    async search(key, k, filter, cancelled, pause, progress) {
+      const query = this.docs.get(key);
+      if (!query || cancelled()) return [];
+      progress({ done: 0, total: 0 });
+      const keys = await this.retrieve(query, filter, pause, cancelled),
+        results = [];
+      progress({ done: 0, total: keys.length });
+      let done = 0;
+      for (const candidate of keys) {
+        if (cancelled()) return [];
+        const doc = this.docs.get(candidate),
+          score = cosine(query.vector, doc.vector);
+        if (score > 0) results.push({ key: candidate, score, weak: doc.weak });
+        progress({ done: ++done, total: keys.length });
+        if (done % 50 === 0) await pause();
+      }
+      results.sort((a, b) => b.score - a.score || a.key.localeCompare(b.key));
+      const accepted = [];
+      // SimHash is a heuristic. Apply only to substantial full-text vectors and
+      // require a very high cosine too, avoiding false merges of short metadata.
+      const duplicate = (a, b) =>
+        !a.weak &&
+        !b.weak &&
+        a.length >= 100 &&
+        b.length >= 100 &&
+        distance(a.simhash, b.simhash) <= 3 &&
+        cosine(a.vector, b.vector) >= 0.95;
+      for (const match of results) {
+        const doc = this.docs.get(match.key);
+        if (
+          duplicate(query, doc) ||
+          accepted.some((m) => duplicate(this.docs.get(m.key), doc))
+        )
+          continue;
+        accepted.push(match);
+        if (accepted.length >= k) break;
+      }
+      return accepted;
+    }
+  }
+  return {
+    Index,
+    Heap,
+    hash,
+    clean,
+    extract,
+    encodeCounts,
+    decodeCounts,
+    encodeSignature,
+    decodeSignature,
+    simhash,
+    encodeSimhash,
+    decodeSimhash,
+    distance,
+    cosine,
+    SIGNATURE_SIZE,
+    CANDIDATES,
+  };
+})();
+if (typeof module !== "undefined" && module.exports)
+  module.exports = { SWSearch };
