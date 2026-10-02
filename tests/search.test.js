@@ -349,3 +349,51 @@ test("close waits for an in-progress open and transaction, then closes only once
   assert.equal(removals, 1);
   assert.equal(corpus._db, null);
 });
+
+test("common title topics survive rare body features and participate in retrieval", async () => {
+  const index = new SWSearch.Index();
+  index.epochN = 1000;
+  index.averageFieldLengths = [3, 1, 2000];
+  const hash = SWSearch.hash("w:hash");
+  index.frozenDF.set(hash, 900);
+  const title = new Map([[hash, 1]]),
+    abstract = new Map(),
+    body = new Map();
+  for (let id = 1; id <= 2000; id++) body.set(id, 1);
+  const counts = Object.assign(new Map([...body, ...title]), {
+    fields: [title, abstract, body],
+  });
+  const query = index.add("1/query", counts, false);
+  index.add(
+    "1/hashing",
+    Object.assign(new Map([[hash, 1]]), {
+      fields: [title, abstract, new Map()],
+    }),
+    false,
+  );
+  index.add(
+    "1/noise",
+    new Map([
+      [1, 1],
+      [2, 1],
+    ]),
+    false,
+  );
+  assert.equal(query.vector.length, 256);
+  assert.ok(new Map(query.vector).has(hash));
+  const results = await index.search(
+    "1/query",
+    20,
+    () => true,
+    () => false,
+    async () => {},
+    () => {},
+  );
+  assert.equal(results[0].key, "1/hashing");
+  assert.ok(
+    results[0].score > 0.05,
+    "shared title topics survive the display threshold",
+  );
+  await index.rebuild();
+  assert.ok(index.docs.get("1/query").fieldVectors[0].length > 0);
+});

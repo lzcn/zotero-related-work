@@ -1,0 +1,23 @@
+<vbox
+  xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
+  xmlns:html="http://www.w3.org/1999/xhtml"
+>
+  <html:section class="main-section">
+    <html:label for="similar-works-method">Recommendation method</html:label>
+    <html:select
+      id="similar-works-method"
+      preference="extensions.zotero.similar-works.recommendationMethod"
+    >
+      <html:option value="text">Text</html:option>
+      <html:option value="semantic">Semantic</html:option>
+    </html:select>
+    <html:p
+      >Text uses local text matching. Semantic uses local neural embeddings and
+      currently supports macOS.</html:p
+    >
+    <html:p
+      >Semantic downloads a small English model on first use, then builds its
+      index gradually. Document text stays on your computer.</html:p
+    >
+  </html:section>
+</vbox>

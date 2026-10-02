@@ -109,6 +109,9 @@ var SWCorpus = class {
     await this._db.execute(
       "CREATE TABLE IF NOT EXISTS fingerprints (key TEXT PRIMARY KEY, counts BLOB NOT NULL, signature BLOB NOT NULL, epoch INTEGER NOT NULL, simhash BLOB NOT NULL)",
     );
+    await this._db.execute(
+      "CREATE TABLE IF NOT EXISTS embeddings (key TEXT PRIMARY KEY, sourceHash TEXT NOT NULL, model TEXT NOT NULL, vector BLOB NOT NULL, updatedAt INTEGER NOT NULL)",
+    );
     var models = await this._db.execute(
       "SELECT v FROM meta WHERE k = 'signatureModel'",
     );
@@ -116,7 +119,7 @@ var SWCorpus = class {
       try {
         const model = JSON.parse(models[0].getResultByName("v"));
         if (
-          model.algorithm === 3 &&
+          model.algorithm === 4 &&
           Number.isInteger(model.epoch) &&
           Array.isArray(model.df) &&
           Array.isArray(model.averageFieldLengths) &&
@@ -259,7 +262,7 @@ var SWCorpus = class {
       "INSERT OR REPLACE INTO meta (k, v) VALUES ('signatureModel', ?)",
       [
         JSON.stringify({
-          algorithm: 3,
+          algorithm: 4,
           epoch: this.search.epoch,
           n: this.search.epochN,
           averageLength: this.search.averageLength,
@@ -431,6 +434,10 @@ var SWCorpus = class {
         throw new Error("[similar-works] delete doc failed", { cause: e });
       }
     }
+    if (typeof SWSemantic !== "undefined") {
+      SWSemantic.vectors.delete(key);
+      SWSemantic.status.indexedItems = SWSemantic.vectors.size;
+    }
     await this._reverseUpdate(key);
     void this._maintainEpoch();
     return true;
@@ -454,6 +461,7 @@ var SWCorpus = class {
         ]);
         this._sourceStates.delete(key);
         await this._db.execute("DELETE FROM fingerprints WHERE key = ?", [key]);
+        await this._db.execute("DELETE FROM embeddings WHERE key = ?", [key]);
       } else {
         await this._writeFingerprint(this.search.docs.get(key));
         await this._db.execute(
@@ -559,7 +567,7 @@ var SWCorpus = class {
   _validRecommendations(cached) {
     return (
       cached &&
-      cached.algorithm === 3 &&
+      cached.algorithm === 4 &&
       typeof cached.queryHash === "string" &&
       Number.isInteger(cached.epoch) &&
       cached.epoch >= 0 &&
@@ -605,7 +613,7 @@ var SWCorpus = class {
       return;
     var cacheKey = JSON.stringify([queryKey, includeWeak]);
     var cached = {
-      algorithm: 3,
+      algorithm: 4,
       epoch: this.search.epoch,
       revision,
       queryHash,
@@ -674,14 +682,14 @@ var SWCorpus = class {
         const matches = cached.matches.filter((m) => m.key !== changedKey);
         if (before) cached.dirty = true; // Deletion can expose an unknown next neighbor.
         if (changed && (includeWeak || !changed.weak)) {
-          const score = SWSearch.cosine(query.vector, changed.vector);
+          const score = this.search.similarity(query, changed);
           const duplicate =
             !query.weak &&
             !changed.weak &&
             query.length >= 100 &&
             changed.length >= 100 &&
             SWSearch.distance(query.simhash, changed.simhash) <= 3 &&
-            score >= 0.95;
+            SWSearch.cosine(query.vector, changed.vector) >= 0.95;
           const duplicateNeighbor =
             !changed.weak &&
             changed.length >= 100 &&
@@ -726,7 +734,7 @@ var SWCorpus = class {
       )
       .map((doc) => ({
         key: doc.key,
-        score: SWSearch.cosine(query.vector, doc.vector),
+        score: this.search.similarity(query, doc),
         weak: doc.weak,
       }))
       .filter((match) => match.score > 0)

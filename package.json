@@ -17,13 +17,15 @@
     "lint": "npm run lint:check",
     "lint:check": "prettier --check . && eslint .",
     "lint:fix": "prettier --write . && eslint . --fix",
-    "test": "node tests/unit.test.js && node --test tests/integration.test.js tests/lifecycle.test.js tests/search.test.js tests/package.test.mjs",
+    "test": "node tests/unit.test.js && node --test tests/integration.test.js tests/lifecycle.test.js tests/search.test.js tests/semantic.test.js tests/package.test.mjs",
     "check": "npm run lint:check && npm test && npm run build",
     "release": "npm run check && node scripts/package-release.mjs",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
+    "@huggingface/transformers": "3.8.1",
+    "esbuild": "0.25.10",
     "eslint": "10.11.0",
     "fflate": "0.8.3",
     "prettier": "3.5.3",
@@ -45,6 +47,7 @@
     "epubjs": {
       ".": "0.3.93",
       "@xmldom/xmldom": "0.9.12"
-    }
+    },
+    "sharp": "^0.35.4"
   }
 }

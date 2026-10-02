@@ -22,13 +22,19 @@ Open **Tools → Plugins** in Zotero, select **Install Plugin From File** from t
 
 ## Usage
 
+In **Settings → Similar Works**, choose **Text** for text matching or **Semantic** for local neural embeddings. Semantic currently supports macOS and uses MiniLM-L6, primarily for English papers. Its first use downloads about 23 MB of model weights plus tokenizer files; downloads use Hugging Face, with hf-mirror.com as a fallback. Document text stays on your computer.
+
 Select an item and expand Similar Works to calculate recommendations automatically. Cached results appear immediately. When an item changes, its affected recommendations update in the background. Results are revalidated after an IDF rebuild or after 24 hours. Refresh forces a new calculation; click a result to open it.
+
+Semantic indexing runs one item at a time in a separate worker and stores one vector per paper. Existing vectors are reused; changed items are rebuilt. Recommendations are incomplete until background indexing catches up. Switching to Text pauses semantic indexing.
 
 Indexing runs gradually in the background. Recommendations use field-aware text matching and filter low-scoring results and probable duplicates. First-time indexing must finish before full-text recommendations are available.
 
 ## Data and backup
 
 The index is stored in `similar-works/similarity.sqlite` in your Zotero data directory. It can be rebuilt and does not modify Zotero’s original full-text database.
+
+To check background indexing progress, read `similar-works/index-status.json` in the Zotero data directory. It records the indexed and total item counts and the current state.
 
 ## Development
 

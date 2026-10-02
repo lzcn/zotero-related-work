@@ -26,6 +26,58 @@ var SWIndexer = {
   _draining: false,
   _notifierID: null,
   _started: false,
+  _libraryScanned: false,
+  _libraryScanning: false,
+  _libraryTotal: null,
+  _statusLastWrite: 0,
+  _statusWrite: Promise.resolve(),
+
+  getStatus() {
+    const indexedItems = this.corpus?.n || 0;
+    return {
+      updatedAt: new Date().toISOString(),
+      state: this._stopped
+        ? "stopped"
+        : this.corpus?.progress.phase === "error"
+          ? "error"
+          : this.corpus?.progress.phase !== "ready"
+            ? "preparing"
+            : this._libraryScanning
+              ? "scanning"
+              : !this._libraryScanned
+                ? "waiting"
+                : this._draining || this._queue.length || this._inFlight.size
+                  ? "indexing"
+                  : "idle",
+      indexedItems,
+      totalItems: this._libraryTotal,
+      queuedItems: this._queue.length,
+      libraryScanComplete: this._libraryScanned,
+      error: this.corpus?.progress.error || null,
+      semantic:
+        typeof SWSemantic === "undefined"
+          ? null
+          : { ...SWSemantic.status, queuedItems: SWSemantic._queue.length },
+    };
+  },
+
+  _reportStatus(force = false) {
+    if (typeof IOUtils.writeUTF8 !== "function") return;
+    const now = Date.now();
+    if (!force && now - this._statusLastWrite < 10000) return;
+    this._statusLastWrite = now;
+    const status = this.getStatus();
+    this._statusWrite = this._statusWrite
+      .then(async () => {
+        const dir = PathUtils.join(Zotero.DataDirectory.dir, "similar-works");
+        await IOUtils.makeDirectory(dir, { ignoreExisting: true });
+        await IOUtils.writeUTF8(
+          PathUtils.join(dir, "index-status.json"),
+          JSON.stringify(status, null, 2) + "\n",
+        );
+      })
+      .catch((error) => Zotero.logError(error));
+  },
 
   async start() {
     if (this._started) {
@@ -33,8 +85,12 @@ var SWIndexer = {
     }
     this._started = true;
     this.corpus = new SWCorpus();
+    this._reportStatus(true);
     this._scanPromise = this.corpus.ready
       .then(async () => {
+        this._reportStatus(true);
+        if (typeof SWSemantic !== "undefined")
+          void SWSemantic.start(this.corpus).catch((e) => Zotero.logError(e));
         var remaining = SWPref("backgroundStartupDelayMs", 30000);
         while (!this._stopped && remaining > 0) {
           await swYield(Math.min(250, remaining));
@@ -147,6 +203,9 @@ var SWIndexer = {
   },
 
   async enqueueLibrary() {
+    this._libraryScanning = true;
+    this._libraryScanned = false;
+    this._reportStatus(true);
     try {
       var live = new Set();
       var oldKeys = Array.from(this.corpus.docs.keys());
@@ -167,12 +226,17 @@ var SWIndexer = {
           if (SWPref("backgroundIndexing", true)) this.enqueue(id);
         }
       }
+      this._libraryTotal = live.size;
       for (var key of oldKeys) {
         if (this._stopped) return;
         if (!live.has(key)) await this.corpus.removeDoc(key);
       }
+      this._libraryScanned = true;
     } catch (e) {
       Zotero.logError(e);
+    } finally {
+      this._libraryScanning = false;
+      this._reportStatus(true);
     }
   },
 
@@ -193,9 +257,11 @@ var SWIndexer = {
         }
         if (this._stopped) break;
         await this._processId(id);
+        this._reportStatus();
       }
     } finally {
       this._draining = false;
+      this._reportStatus(true);
     }
   },
 
@@ -305,6 +371,7 @@ var SWIndexer = {
     );
     var prev = this.corpus.docs.get(key);
     if (prev && prev.hash === info.hash) {
+      if (typeof SWSemantic !== "undefined") SWSemantic.enqueue(key);
       return;
     }
     await this.corpus.yieldToForeground();
@@ -323,6 +390,7 @@ var SWIndexer = {
     if (!tf || this._stopped) return;
     var weak = info.weak || tf.size < SWPref("minFulltextTerms", 25);
     await this.corpus._upsertDoc(key, info.hash, weak, tf);
+    if (typeof SWSemantic !== "undefined") SWSemantic.enqueue(key);
   },
 
   async termFreqInBackground(text) {
@@ -351,7 +419,7 @@ var SWIndexer = {
   },
 
   /** @param {Zotero.Item} item */
-  async extractText(item) {
+  async extractText(item, readCached = false) {
     if (item.isRegularItem()) {
       var atts = [];
       try {
@@ -370,7 +438,7 @@ var SWIndexer = {
         }
       } catch (e) {}
       for (var att of atts.slice(0, 5)) {
-        var t = await this.attachmentText(att);
+        var t = await this.attachmentText(att, readCached);
         if (t) {
           return t;
         }
@@ -378,12 +446,14 @@ var SWIndexer = {
       return this.metadataText(item);
     }
     if (item.isAttachment()) {
-      return (await this.attachmentText(item)) || this.metadataText(item);
+      return (
+        (await this.attachmentText(item, readCached)) || this.metadataText(item)
+      );
     }
     return null;
   },
 
-  async attachmentText(att) {
+  async attachmentText(att, readCached = false) {
     try {
       if (att.deleted) return null;
       this._itemKeys.set(att.id, {
@@ -424,11 +494,15 @@ var SWIndexer = {
               "\n" +
               String(parent.getField("abstractNote") || ""),
           );
-      if (parent && this.corpus.docs.get(this.docKey(parent))?.hash === hash) {
+      if (
+        !readCached &&
+        parent &&
+        this.corpus.docs.get(this.docKey(parent))?.hash === hash
+      ) {
         return { content: "", hash, weak: false };
       }
       var buf = await IOUtils.read(path, {
-        maxBytes: SWPref("maxTextChars", 1200000),
+        maxBytes: readCached ? 24000 : SWPref("maxTextChars", 1200000),
       });
       var content = new TextDecoder("utf-8").decode(buf);
       if (!content || content.trim().length < 40) {
@@ -481,6 +555,7 @@ var SWIndexer = {
     }
     this._queue = [];
     this._queued.clear();
+    this._reportStatus(true);
   },
 
   async shutdown() {
@@ -489,5 +564,6 @@ var SWIndexer = {
     await this._scanPromise;
     await this._drainPromise;
     await Promise.allSettled(Array.from(this._inFlight.values()));
+    await this._statusWrite;
   },
 };

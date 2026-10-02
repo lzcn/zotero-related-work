@@ -10,6 +10,11 @@ export const requiredFiles = [
   "src/corpus.js",
   "src/indexer.js",
   "src/section.js",
+  "src/semantic.js",
+  "content/preferences.xhtml",
+  "runtime/worker.js",
+  "runtime/ort-wasm-simd-threaded.mjs",
+  "runtime/ort-wasm-simd-threaded.wasm",
   "locale/en-US/similar-works.ftl",
   "locale/zh-CN/similar-works.ftl",
 ];

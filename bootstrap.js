@@ -5,6 +5,8 @@ var SWScope = {
   IOUtils,
   PathUtils,
   TextDecoder,
+  TextEncoder: typeof TextEncoder === "undefined" ? undefined : TextEncoder,
+  Ci: typeof Ci === "undefined" ? undefined : Ci,
   setTimeout,
   clearTimeout,
   SWPlugin: { id: null, version: null, rootURI: null },
@@ -20,6 +22,7 @@ function stopWork() {
   SWReady = false;
   ++SWGeneration;
   SWScope.SWSection?.shutdown();
+  SWScope.SWSemantic?.stop();
   SWScope.SWIndexer?.requestStop?.();
 }
 
@@ -45,6 +48,7 @@ async function start({ id, version, rootURI }, token) {
       "search.js",
       "corpus.js",
       "indexer.js",
+      "semantic.js",
       "section.js",
     ];
     for (var file of files)
@@ -79,6 +83,8 @@ async function start({ id, version, rootURI }, token) {
 
 async function releaseResources() {
   removeQuitObserver();
+  SWScope.SWSemantic?.stop();
+  await SWScope.SWSemantic?._running;
   if (SWScope.SWSection) SWScope.SWSection.shutdown();
   if (SWScope.SWIndexer) await SWScope.SWIndexer.shutdown();
   if (SWScope.SWIndexer?.corpus) await SWScope.SWIndexer.corpus.close();

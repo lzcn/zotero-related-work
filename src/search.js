@@ -395,7 +395,9 @@ var SWSearch = (() => {
     }
     fingerprint(counts) {
       const effective = new Map(),
-        top = new Heap(SIGNATURE_SIZE);
+        top = new Heap(SIGNATURE_SIZE),
+        titleTop = new Heap(64);
+      const titleIds = new Set(fieldsOf(counts)[0].keys());
       const lengths = fieldLengths(counts);
       fieldsOf(counts).forEach((field, i) => {
         const b = FIELD_NORMALIZATION[i];
@@ -410,15 +412,62 @@ var SWSearch = (() => {
       for (const [id, count] of effective) {
         const df = Math.min(this.epochN, this.frozenDF.get(id) || 0);
         const idf = Math.log(1 + (this.epochN - df + 0.5) / (df + 0.5));
-        top.add([id, (idf * count * 2.2) / (count + 1.2)]);
+        const pair = [id, (idf * count * 2.2) / (count + 1.2)];
+        top.add(pair);
+        if (titleIds.has(id)) titleTop.add(pair);
       }
-      const weighted = top.sorted(),
+      const selected = new Map(titleTop.sorted());
+      for (const [id, weight] of top.sorted()) {
+        if (selected.size >= SIGNATURE_SIZE) break;
+        selected.set(id, weight);
+      }
+      const weighted = [...selected],
         norm = Math.sqrt(weighted.reduce((s, p) => s + p[1] * p[1], 0));
       return decodeSignature(
         encodeSignature(
           weighted.map(([id, w]) => [id, w / norm]).sort((a, b) => a[0] - b[0]),
         ),
       );
+    }
+    fieldVector(field, limit) {
+      const top = new Heap(limit);
+      for (const [id, count] of field) {
+        const df = Math.min(this.epochN, this.frozenDF.get(id) || 0);
+        const idf = Math.log(1 + (this.epochN - df + 0.5) / (df + 0.5));
+        top.add([id, idf * (1 + Math.log(count))]);
+      }
+      const pairs = top.sorted();
+      const norm = Math.sqrt(pairs.reduce((sum, p) => sum + p[1] * p[1], 0));
+      return decodeSignature(
+        encodeSignature(
+          pairs
+            .map(([id, weight]) => [id, weight / norm])
+            .sort((a, b) => a[0] - b[0]),
+        ),
+      );
+    }
+    fieldVectors(counts) {
+      const fields = fieldsOf(counts);
+      return [
+        this.fieldVector(fields[0], 64),
+        this.fieldVector(fields[1], 128),
+      ];
+    }
+    similarity(a, b) {
+      // Normalize each field separately so rare PDF noise cannot drown out the title.
+      let score = 0,
+        weight = 0;
+      const channels = [
+        [a.fieldVectors[0], b.fieldVectors[0], 0.3],
+        [a.fieldVectors[1], b.fieldVectors[1], 0.3],
+        [a.vector, b.vector, 0.4],
+      ];
+      for (const [left, right, share] of channels) {
+        if (!left.length || !right.length) continue;
+        score += share * cosine(left, right);
+        weight += share;
+      }
+      return weight ? score / weight : 0;
     }
     _post(doc, insert) {
       for (const [term, weight] of doc.vector) {
@@ -460,6 +509,8 @@ var SWSearch = (() => {
         counts: encodeCounts(counts),
         length: [...counts.values()].reduce((a, b) => a + b, 0),
         fieldLengths: fieldLengths(counts),
+        titleIds: new Set(fieldsOf(counts)[0].keys()),
+        fieldVectors: this.fieldVectors(counts),
         vector: signature
           ? decodeSignature(signature)
           : this.fingerprint(counts),
@@ -505,10 +556,11 @@ var SWSearch = (() => {
       let i = 0;
       for (const doc of this.docs.values()) {
         if (cancelled() || this.changes !== startingChanges) return false;
-        vectors.set(
-          doc.key,
-          generator.fingerprint(decodeCounts(await loadCounts(doc))),
-        );
+        const counts = decodeCounts(await loadCounts(doc));
+        vectors.set(doc.key, {
+          vector: generator.fingerprint(counts),
+          fieldVectors: generator.fieldVectors(counts),
+        });
         if (++i % 5 === 0) {
           await pause();
           if (cancelled() || this.changes !== startingChanges) return false;
@@ -518,7 +570,7 @@ var SWSearch = (() => {
       const staged = new Index();
       let built = 0;
       for (const doc of this.docs.values()) {
-        const next = { ...doc, vector: vectors.get(doc.key) };
+        const next = { ...doc, ...vectors.get(doc.key) };
         staged.docs.set(doc.key, next);
         staged.byID.set(doc.id, next);
         staged._post(next, true);
@@ -540,9 +592,18 @@ var SWSearch = (() => {
       return true;
     }
     async retrieve(query, filter, pause, cancelled) {
-      const top = new Heap(QUERY_TERMS);
-      for (const pair of query.vector) top.add(pair);
-      let cursors = top.sorted().flatMap(([term, weight]) => {
+      const top = new Heap(QUERY_TERMS),
+        titleTop = new Heap(16);
+      for (const pair of query.vector) {
+        top.add(pair);
+        if (query.titleIds.has(pair[0])) titleTop.add(pair);
+      }
+      const selected = new Map(titleTop.sorted());
+      for (const [id, weight] of top.sorted()) {
+        if (selected.size >= QUERY_TERMS) break;
+        selected.set(id, weight);
+      }
+      let cursors = [...selected].flatMap(([term, weight]) => {
         const p = this.postings.get(term);
         return p ? [{ p, weight, at: 0 }] : [];
       });
@@ -605,7 +666,7 @@ var SWSearch = (() => {
       for (const candidate of keys) {
         if (cancelled()) return [];
         const doc = this.docs.get(candidate),
-          score = cosine(query.vector, doc.vector);
+          score = this.similarity(query, doc);
         if (score > 0) results.push({ key: candidate, score, weak: doc.weak });
         progress({ done: ++done, total: keys.length });
         if (done % 50 === 0) await pause();

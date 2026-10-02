@@ -5,6 +5,7 @@ import { zipSync } from "fflate";
 import assert from "node:assert/strict";
 import { Script } from "node:vm";
 import { validatePackage } from "./validate-package.mjs";
+import { build } from "esbuild";
 import { requiredFiles } from "./package-files.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -65,7 +66,8 @@ for (const name of [
   "THIRD-PARTY-NOTICES",
 ])
   await add(name);
-for (const name of ["src", "icons", "locale"]) await addDirectory(name);
+for (const name of ["src", "icons", "locale", "content"])
+  await addDirectory(name);
 // Validate the same script paths that Zotero's bootstrap loads.
 const bootstrap = files["bootstrap.js"].toString("utf8");
 const scriptList = bootstrap.match(/var files = \[([^\]]+)\]/);
@@ -79,6 +81,42 @@ for (const locale of ["en-US", "zh-CN"]) {
     `Missing locale: ${locale}`,
   );
 }
+
+// Bundle the browser runtime; no Node.js or Python is required by Zotero.
+const worker = await build({
+  entryPoints: [join(root, "ml/worker.js")],
+  bundle: true,
+  write: false,
+  platform: "browser",
+  format: "iife",
+  target: "firefox140",
+  minify: true,
+  legalComments: "inline",
+  alias: { "onnxruntime-web": "onnxruntime-web/wasm" },
+});
+files["runtime/worker.js"] = worker.outputFiles[0].contents;
+for (const name of [
+  "ort-wasm-simd-threaded.mjs",
+  "ort-wasm-simd-threaded.wasm",
+])
+  files[`runtime/${name}`] = await readFile(
+    join(root, "node_modules/onnxruntime-web/dist", name),
+  );
+for (const [name, packageName] of [
+  ["transformers", "@huggingface/transformers"],
+  ["jinja", "@huggingface/jinja"],
+])
+  files[`runtime/${name}-LICENSE`] = await readFile(
+    join(root, "node_modules", packageName, "LICENSE"),
+  );
+
+files["runtime/onnxruntime-LICENSE"] = await readFile(
+  join(root, "licenses/onnxruntime.txt"),
+);
+
+files["runtime/onnxruntime-NOTICES"] = await readFile(
+  join(root, "licenses/onnxruntime-notices.txt"),
+);
 
 const output = join(root, "dist", `${pkg.name}.xpi`);
 const bytes = zipSync(files, {

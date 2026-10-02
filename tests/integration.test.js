@@ -929,3 +929,88 @@ test("foreground tasks interrupt background work only at safe batch boundaries",
   h.corpus._stopped = true;
   assert.equal((await h.corpus.scoreTopKAsync("1/A", 10)).length, 0);
 });
+
+test("background status distinguishes pending scans, queued work, and idle indexing", async () => {
+  const h = harness();
+  await h.SWIndexer.processItem(h.item(1, "spectral hashing"));
+  const writes = [];
+  h.Zotero.DataDirectory = { dir: "/data" };
+  h.context.PathUtils = { join: (...parts) => parts.join("/") };
+  h.IOUtils.makeDirectory = async () => {};
+  h.IOUtils.writeUTF8 = async (path, text) =>
+    writes.push([path, JSON.parse(text)]);
+  assert.equal(h.SWIndexer.getStatus().state, "waiting");
+  h.SWIndexer._libraryScanned = true;
+  h.SWIndexer._libraryTotal = 2;
+  h.SWIndexer._queue = [2];
+  h.SWIndexer._reportStatus(true);
+  await h.SWIndexer._statusWrite;
+  assert.equal(writes[0][0], "/data/similar-works/index-status.json");
+  assert.equal(writes[0][1].state, "indexing");
+  assert.equal(writes[0][1].indexedItems, 1);
+  assert.equal(writes[0][1].totalItems, 2);
+  h.SWIndexer._queue = [];
+  assert.equal(h.SWIndexer.getStatus().state, "idle");
+  h.SWIndexer.requestStop();
+  await h.SWIndexer._statusWrite;
+  assert.equal(writes.at(-1)[1].state, "stopped");
+});
+
+test("Zotero integer preference loading does not truncate the similarity threshold", async () => {
+  const h = harness();
+  h.context.pref = (key, value) => {
+    // Zotero Plugins.setDefaultPrefs routes numbers through setIntPref.
+    h.prefs.set(
+      key.replace("extensions.zotero.", ""),
+      typeof value === "number" ? Math.trunc(value) : value,
+    );
+  };
+  vm.runInContext(
+    fs.readFileSync(path.join(__dirname, "../prefs.js"), "utf8"),
+    h.context,
+  );
+  await h.SWIndexer.processItem(h.item(2, "hashing"));
+  const rows = await h.SWSection._resolveRows(
+    [{ key: "1/KEY2", score: 0.004, weak: true }],
+    20,
+  );
+  assert.equal(rows.length, 0);
+});
+
+test("method preference keeps Text and Semantic separate without sidebar controls", async () => {
+  const h = harness();
+  h.context.Zotero.isMac = true;
+  const item = h.item(1, "hashing");
+  await h.SWIndexer.processItem(item);
+  await h.SWIndexer.processItem(h.item(2, "binary codes"));
+  let paused = 0,
+    enabled = 0;
+  h.context.SWSemantic = {
+    _enabled: false,
+    status: { state: "idle" },
+    vectors: new Map(),
+    start: async () => {},
+    enable() {
+      this._enabled = true;
+      enabled++;
+    },
+    pause() {
+      this._enabled = false;
+      paused++;
+    },
+    enqueue() {},
+    search: async () => [{ key: "1/KEY2", score: 0.7, weak: false }],
+  };
+  // Text and dense scores must never share a threshold.
+  h.prefs.set("similar-works.minimumSimilarity", "0.8");
+  h.prefs.set("similar-works.recommendationMethod", "semantic");
+  await h.SWSection.renderBody({ body: h.body, item }, true);
+  assert.equal(enabled, 1);
+  assert.equal(h.body.querySelectorAll(".sw-row").length, 1);
+  assert.equal(h.body.querySelector("select"), null);
+  h.prefs.set("similar-works.recommendationMethod", "text");
+  await h.SWSection.onMethodChanged();
+  await h.body._swWork;
+  assert.equal(paused, 1);
+  assert.equal(h.body.querySelectorAll(".sw-row").length, 0);
+});
