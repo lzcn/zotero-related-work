@@ -16,7 +16,7 @@
 
 ## 安装
 
-需要 Zotero 10。
+需要 Zotero 10。从[最新发布](https://github.com/lzcn/zotero-similar-works/releases/latest)下载 `.xpi` 安装包。
 
 在 Zotero 的“工具 → 插件”中，点击齿轮菜单，选择“从文件安装插件”，选择 `.xpi` 文件后重启。
 

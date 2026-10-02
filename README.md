@@ -16,7 +16,7 @@ Find similar papers in your Zotero library. Uses the existing full-text cache, w
 
 ## Installation
 
-Requires Zotero 10.
+Requires Zotero 10. Download the `.xpi` file from the [latest release](https://github.com/lzcn/zotero-similar-works/releases/latest).
 
 Open **Tools → Plugins** in Zotero, select **Install Plugin From File** from the gear menu, choose the `.xpi` file, and restart Zotero.
 
