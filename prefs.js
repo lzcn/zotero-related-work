@@ -1,5 +1,6 @@
 // Internal defaults; this minimal version intentionally has no settings UI.
-pref("extensions.zotero.similar-works.recommendationCount", 10);
+pref("extensions.zotero.similar-works.maxRecommendations", 20);
+pref("extensions.zotero.similar-works.minimumSimilarity", 0.05);
 pref("extensions.zotero.similar-works.minTokenLength", 2);
 pref("extensions.zotero.similar-works.maxTextChars", 1200000);
 pref("extensions.zotero.similar-works.backgroundIndexing", true);

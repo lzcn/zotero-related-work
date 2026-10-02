@@ -1,4 +1,4 @@
-var SW_SCHEMA_VERSION = 2;
+var SW_SCHEMA_VERSION = 3;
 
 /** @param {number} ms @returns {Promise<void>} */
 function swYield(ms) {
@@ -16,7 +16,9 @@ var SWCorpus = class {
     this._taskPromises = new WeakMap();
     this._taskDrain = Promise.resolve();
     this._epochPending = false;
-    this._idleRegistered = false;
+    this._closePromise = null;
+    this._shutdownClient = null;
+    this._shutdownBlocker = () => this.close();
     this.search = new SWSearch.Index();
     this.docs = new Map();
     this.df = new Map();
@@ -44,11 +46,18 @@ var SWCorpus = class {
       var dataDir = Zotero.DataDirectory.dir;
       var dir = PathUtils.join(dataDir, "similar-works");
       await IOUtils.makeDirectory(dir, { ignoreExisting: true });
+      if (this._stopped) return;
       this._dbPath = PathUtils.join(dir, "similarity.sqlite");
       var { Sqlite } = ChromeUtils.importESModule(
         "resource://gre/modules/Sqlite.sys.mjs",
       );
+      this._shutdownClient = Sqlite.shutdown;
+      this._shutdownClient?.addBlocker(
+        "Similar Works: close similarity database",
+        this._shutdownBlocker,
+      );
       this._db = await Sqlite.openConnection({ path: this._dbPath });
+      if (this._stopped) return;
       await this._db.execute("PRAGMA journal_mode = WAL");
       await this._ensureSchema();
       await this._loadAll();
@@ -80,8 +89,11 @@ var SWCorpus = class {
       Number(schema[0].getResultByName("v")) > SW_SCHEMA_VERSION
     )
       throw new Error("The index was created by a newer plugin version");
-    if (schema.length && Number(schema[0].getResultByName("v")) === 1) {
-      const backupPath = this._dbPath + ".v1-backup";
+    const oldSchema = schema.length
+      ? Number(schema[0].getResultByName("v"))
+      : 0;
+    if (oldSchema > 0 && oldSchema < SW_SCHEMA_VERSION) {
+      const backupPath = this._dbPath + ".v" + oldSchema + "-backup";
       if (!(await IOUtils.exists(backupPath)))
         await this._db.execute("VACUUM INTO ?", [backupPath]);
     }
@@ -104,13 +116,17 @@ var SWCorpus = class {
       try {
         const model = JSON.parse(models[0].getResultByName("v"));
         if (
-          model.algorithm === 2 &&
+          model.algorithm === 3 &&
           Number.isInteger(model.epoch) &&
-          Array.isArray(model.df)
+          Array.isArray(model.df) &&
+          Array.isArray(model.averageFieldLengths) &&
+          model.averageFieldLengths.length === 3 &&
+          model.averageFieldLengths.every((n) => Number.isFinite(n) && n > 0)
         ) {
           this.search.epoch = model.epoch;
           this.search.epochN = model.n;
           this.search.averageLength = model.averageLength;
+          this.search.averageFieldLengths = model.averageFieldLengths;
           this.search.frozenDF = new Map(model.df);
         }
       } catch (error) {
@@ -142,7 +158,7 @@ var SWCorpus = class {
     this.progress = { phase: "loading", done: 0, total: total };
     var rebuild = !this.search.epoch;
     var offset = 0;
-    var chunk = this.search.epoch ? 100 : 5;
+    var chunk = 100;
     var sliceStarted = Date.now();
     while (!this._stopped) {
       var rows = await this._db.execute(
@@ -190,11 +206,11 @@ var SWCorpus = class {
       }
       offset += rows.length;
       this.progress = { phase: "loading", done: offset, total: total };
-      await swYield(this.search.epoch ? 1 : 20);
+      await swYield(5);
     }
     if (rebuild) {
       await this.search.rebuild(
-        () => swYield(40),
+        () => swYield(10),
         () => this._stopped,
         (doc) => this._readCounts(doc.key),
       );
@@ -243,10 +259,11 @@ var SWCorpus = class {
       "INSERT OR REPLACE INTO meta (k, v) VALUES ('signatureModel', ?)",
       [
         JSON.stringify({
-          algorithm: 2,
+          algorithm: 3,
           epoch: this.search.epoch,
           n: this.search.epochN,
           averageLength: this.search.averageLength,
+          averageFieldLengths: this.search.averageFieldLengths,
           df: [...this.search.frozenDF],
         }),
       ],
@@ -288,8 +305,10 @@ var SWCorpus = class {
       ]);
     } else
       await this._db.execute(
-        "UPDATE fingerprints SET signature = ?, epoch = ? WHERE key = ?",
-        [signature, this.search.epoch, doc.key],
+        // Sqlite.sys.mjs treats an array starting with an object as batch bindings.
+        // Keep the scalar key first so the signature is bound as a BLOB.
+        "UPDATE fingerprints SET signature = ?2, epoch = ?3 WHERE key = ?1",
+        [doc.key, signature, this.search.epoch],
       );
   }
 
@@ -320,19 +339,9 @@ var SWCorpus = class {
         }
       }, -1);
     };
-    const idleDB =
-      typeof Zotero !== "undefined"
-        ? /** @type {Zotero.DB & Partial<SWIdleDatabase>} */ (Zotero.DB)
-        : null;
-    if (typeof idleDB?.onIdle === "function") {
-      if (!this._idleRegistered) {
-        this._idleRegistered = true;
-        idleDB.onIdle(work);
-      }
-    } else
-      void work().catch((error) => {
-        if (typeof Zotero !== "undefined") Zotero.logError(error);
-      });
+    void work().catch((error) => {
+      if (typeof Zotero !== "undefined") Zotero.logError(error);
+    });
   }
 
   upsertDoc(key, hash, weak, tf, priority = 0) {
@@ -550,7 +559,7 @@ var SWCorpus = class {
   _validRecommendations(cached) {
     return (
       cached &&
-      cached.algorithm === 2 &&
+      cached.algorithm === 3 &&
       typeof cached.queryHash === "string" &&
       Number.isInteger(cached.epoch) &&
       cached.epoch >= 0 &&
@@ -596,7 +605,7 @@ var SWCorpus = class {
       return;
     var cacheKey = JSON.stringify([queryKey, includeWeak]);
     var cached = {
-      algorithm: 2,
+      algorithm: 3,
       epoch: this.search.epoch,
       revision,
       queryHash,
@@ -771,16 +780,27 @@ var SWCorpus = class {
     );
   }
 
-  async close() {
+  close() {
     this._stopped = true;
+    if (!this._closePromise) this._closePromise = this._close();
+    return this._closePromise;
+  }
+
+  async _close() {
+    // An in-progress open must finish before its connection can be closed.
+    await this._ready;
     await this._taskDrain;
     if (this._db) {
       var db = this._db;
       this._db = null;
       try {
         await db.close();
-      } catch (e) {}
+      } catch (e) {
+        Zotero.logError(e);
+      }
     }
+    this._shutdownClient?.removeBlocker(this._shutdownBlocker);
+    this._shutdownClient = null;
     this.search.docs.clear();
     this.search.byID.clear();
     this.search.postings.clear();

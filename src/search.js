@@ -4,6 +4,25 @@ var SWSearch = (() => {
     QUERY_TERMS = 48,
     CANDIDATES = 300,
     BLOCK_SIZE = 128;
+  const FIELD_WEIGHTS = [4, 2, 1];
+  const FIELD_NORMALIZATION = [0.3, 0.6, 0.75];
+  const FIELD_MAGIC = 0x33574653;
+  function mergeFields(fields) {
+    const counts = new Map();
+    fields.forEach((field, i) => {
+      for (const [id, count] of field)
+        counts.set(id, (counts.get(id) || 0) + FIELD_WEIGHTS[i] * count);
+    });
+    return Object.assign(counts, { fields });
+  }
+  function fieldsOf(counts) {
+    return counts.fields || [new Map(), new Map(), counts];
+  }
+  function fieldLengths(counts) {
+    return fieldsOf(counts).map((field) =>
+      [...field.values()].reduce((sum, n) => sum + n, 0),
+    );
+  }
   function hash(text, seed = 2166136261) {
     let h = seed;
     for (let i = 0; i < text.length; i++)
@@ -75,25 +94,43 @@ var SWSearch = (() => {
     pause = async () => {},
     cancelled = () => false,
   ) {
-    const counts = new Map();
+    const fieldsCounts = [new Map(), new Map(), new Map()];
     let operations = 0;
-    for (const [text, multiplier] of [
-      [fields.title, 4],
-      [fields.abstract, 2],
-      [fields.body, 1],
-    ]) {
+    for (const [i, text] of [
+      fields.title,
+      fields.abstract,
+      fields.body,
+    ].entries()) {
       for (const feature of features(clean(text))) {
-        counts.set(feature, (counts.get(feature) || 0) + multiplier);
+        const counts = fieldsCounts[i];
+        counts.set(feature, (counts.get(feature) || 0) + 1);
         if (++operations % 2000 === 0) {
           await pause();
           if (cancelled()) return null;
         }
-        if (operations >= 100000) return counts;
+        if (operations >= 100000) return mergeFields(fieldsCounts);
       }
     }
-    return counts;
+    return mergeFields(fieldsCounts);
   }
   function encodeCounts(counts) {
+    if (counts.fields) {
+      const parts = counts.fields.map((field) => encodeCounts(field));
+      const bytes = new Uint8Array(
+        24 + parts.reduce((n, p) => n + p.length, 0),
+      );
+      const view = new DataView(bytes.buffer);
+      view.setUint32(0, FIELD_MAGIC, true);
+      view.setFloat32(4, NaN, true);
+      view.setUint32(8, 3, true);
+      let offset = 24;
+      parts.forEach((part, i) => {
+        view.setUint32(12 + i * 4, part.length / 8, true);
+        bytes.set(part, offset);
+        offset += part.length;
+      });
+      return bytes;
+    }
     const bytes = new Uint8Array(counts.size * 8),
       view = new DataView(bytes.buffer);
     let i = 0;
@@ -108,6 +145,26 @@ var SWSearch = (() => {
     const bytes = new Uint8Array(data),
       view = new DataView(bytes.buffer),
       counts = new Map();
+    if (
+      bytes.length >= 8 &&
+      view.getUint32(0, true) === FIELD_MAGIC &&
+      Number.isNaN(view.getFloat32(4, true))
+    ) {
+      if (bytes.length < 24 || view.getUint32(8, true) !== 3)
+        throw new Error("Invalid field counts header");
+      const fields = [];
+      let offset = 24;
+      for (let i = 0; i < 3; i++) {
+        const length = view.getUint32(12 + i * 4, true) * 8;
+        if (offset + length > bytes.length)
+          throw new Error("Truncated field counts");
+        fields.push(decodeCounts(bytes.slice(offset, offset + length)));
+        offset += length;
+      }
+      if (offset !== bytes.length)
+        throw new Error("Invalid field counts length");
+      return mergeFields(fields);
+    }
     if (bytes.length % 8) throw new Error("Invalid feature counts");
     for (let i = 0; i < bytes.length; i += 8) {
       const count = view.getFloat32(i + 4, true);
@@ -315,11 +372,14 @@ var SWSearch = (() => {
       this.frozenDF = new Map();
       this.epochN = 0;
       this.averageLength = 1;
+      this.averageFieldLengths = [1, 1, 1];
       this.epoch = 0;
       this.changes = 0;
       this.nextID = 1;
     }
     counts(tf) {
+      if (tf.fields)
+        return mergeFields(tf.fields.map((field) => this.counts(field)));
       const result = new Map();
       for (const [term, count] of tf) {
         const id =
@@ -334,13 +394,23 @@ var SWSearch = (() => {
       return result;
     }
     fingerprint(counts) {
-      const length = [...counts.values()].reduce((a, b) => a + b, 0),
+      const effective = new Map(),
         top = new Heap(SIGNATURE_SIZE);
-      const denominator = 1.2 * (0.25 + (0.75 * length) / this.averageLength);
-      for (const [id, count] of counts) {
+      const lengths = fieldLengths(counts);
+      fieldsOf(counts).forEach((field, i) => {
+        const b = FIELD_NORMALIZATION[i];
+        const denominator =
+          1 - b + (b * lengths[i]) / this.averageFieldLengths[i];
+        for (const [id, count] of field)
+          effective.set(
+            id,
+            (effective.get(id) || 0) + (FIELD_WEIGHTS[i] * count) / denominator,
+          );
+      });
+      for (const [id, count] of effective) {
         const df = Math.min(this.epochN, this.frozenDF.get(id) || 0);
         const idf = Math.log(1 + (this.epochN - df + 0.5) / (df + 0.5));
-        top.add([id, (idf * count * 2.2) / (count + denominator)]);
+        top.add([id, (idf * count * 2.2) / (count + 1.2)]);
       }
       const weighted = top.sorted(),
         norm = Math.sqrt(weighted.reduce((s, p) => s + p[1] * p[1], 0));
@@ -389,6 +459,7 @@ var SWSearch = (() => {
         weak,
         counts: encodeCounts(counts),
         length: [...counts.values()].reduce((a, b) => a + b, 0),
+        fieldLengths: fieldLengths(counts),
         vector: signature
           ? decodeSignature(signature)
           : this.fingerprint(counts),
@@ -423,6 +494,13 @@ var SWSearch = (() => {
       generator.frozenDF = df;
       generator.epochN = n;
       generator.averageLength = average;
+      generator.averageFieldLengths = [0, 1, 2].map(
+        (i) =>
+          [...this.docs.values()].reduce(
+            (sum, doc) => sum + doc.fieldLengths[i],
+            0,
+          ) / Math.max(1, n) || 1,
+      );
       const vectors = new Map();
       let i = 0;
       for (const doc of this.docs.values()) {
@@ -453,6 +531,7 @@ var SWSearch = (() => {
       this.frozenDF = df;
       this.epochN = n;
       this.averageLength = average;
+      this.averageFieldLengths = generator.averageFieldLengths;
       this.docs = staged.docs;
       this.byID = staged.byID;
       this.postings = staged.postings;

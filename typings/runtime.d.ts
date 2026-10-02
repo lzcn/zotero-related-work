@@ -19,7 +19,3 @@ declare namespace Zotero {
 }
 
 declare const APP_SHUTDOWN: number;
-
-interface SWIdleDatabase {
-  onIdle(work: () => Promise<unknown>): void;
-}

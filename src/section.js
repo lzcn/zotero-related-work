@@ -241,6 +241,20 @@ var SWSection = {
       return;
     }
     if (corpus.progress.phase !== "ready") {
+      if (!compute && corpus.progress.phase !== "error") {
+        await show(
+          "similar-works-preparing",
+          null,
+          "Preparing recommendations…",
+        );
+        if (body._swToken !== token || this._stopped) return;
+        body.setAttribute("aria-busy", "true");
+        const preparingProgress = body.querySelector(
+          ".sw-computation-progress",
+        );
+        preparingProgress.hidden = false;
+        preparingProgress.removeAttribute("value");
+      }
       await corpus.ready;
       if (body._swToken !== token || this._stopped) return;
     }
@@ -387,7 +401,8 @@ var SWSection = {
     var { body, setSectionSummary, tabType } = props;
     var doc = body.ownerDocument;
     var corpus = SWIndexer.corpus;
-    var k = SWResultLimit(SWPref("recommendationCount", 10));
+    if (setSectionSummary) setSectionSummary("");
+    var k = SWResultLimit(SWPref("maxRecommendations", 20));
     var rows = await this._resolveRows(matches, k);
     if (body._swToken !== token) {
       return;
@@ -501,13 +516,21 @@ var SWSection = {
     list.replaceChildren(...renderedRows);
     body._swResultsSignature = signature;
     if (setSectionSummary) {
-      setSectionSummary(String(rows.length));
+      setSectionSummary("");
     }
   },
 
   async _resolveRows(matches, k) {
     var out = [];
+    const configuredMinimum = Number(SWPref("minimumSimilarity", 0.05));
+    const minimum =
+      Number.isFinite(configuredMinimum) &&
+      configuredMinimum >= 0 &&
+      configuredMinimum <= 1
+        ? configuredMinimum
+        : 0.05;
     for (var m of matches) {
+      if (!Number.isFinite(m.score) || m.score < minimum) continue;
       if (out.length >= k) {
         break;
       }

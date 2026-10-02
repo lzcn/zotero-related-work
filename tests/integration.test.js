@@ -246,7 +246,7 @@ test("sidebar ranks top K in same library, preserves rows during indexing, and n
     b = h.item(3, "machine learning algorithm"),
     other = h.item(4, "neural machine learning", null, 2);
   for (const it of [query, a, b, other]) await h.SWIndexer.processItem(it);
-  h.prefs.set("similar-works.recommendationCount", 2);
+  h.prefs.set("similar-works.maxRecommendations", 2);
   h.SWIndexer._draining = true;
   let summary;
   const props = {
@@ -258,7 +258,7 @@ test("sidebar ranks top K in same library, preserves rows during indexing, and n
   await h.SWSection.renderBody(props, true);
   const rows = h.body.querySelectorAll(".sw-row");
   assert.equal(rows.length, 2);
-  assert.equal(summary, "2");
+  assert.equal(summary, "");
   assert.doesNotMatch(
     h.body.querySelector(".sw-status").textContent,
     /index|comput/i,
@@ -280,13 +280,52 @@ test("sidebar ranks top K in same library, preserves rows during indexing, and n
   );
   assert.equal(h.body.querySelector("input[type=number]"), null);
   assert.equal(h.body.querySelector("input[type=checkbox]"), null);
-  h.prefs.set("similar-works.recommendationCount", 1);
+  h.prefs.set("similar-works.maxRecommendations", 1);
   await h.SWSection.renderBody(props, true);
   assert.equal(h.body.querySelectorAll(".sw-row").length, 1);
   h.prefs.set("similar-works.allowMetadataOnlyRecommendations", false);
   await h.SWSection.renderBody(props, true);
   assert.equal(h.body.querySelectorAll(".sw-row").length, 0);
   assert.equal(h.errors.length, 0);
+});
+
+test("default recommendations are bounded, hide counts, and never pad weak results", async () => {
+  const h = harness();
+  const query = h.item(1, "machine learning");
+  for (let i = 1; i <= 31; i++)
+    await h.SWIndexer.processItem(
+      i === 1 ? query : h.item(i, "machine learning"),
+    );
+  // Ignore a legacy hidden preference rather than carrying its old limit forward.
+  h.prefs.set("similar-works.recommendationCount", 10);
+  let summary;
+  const props = {
+    body: h.body,
+    item: query,
+    setSectionSummary: (value) => (summary = value),
+  };
+  await h.SWSection.renderBody(props, true);
+  assert.equal(h.body.querySelectorAll(".sw-row").length, 20);
+  assert.equal(summary, "");
+  const rows = await h.SWSection._resolveRows(
+    [
+      { key: "1/KEY2", score: 0.05, weak: true },
+      { key: "1/KEY3", score: 0.049, weak: true },
+      { key: "1/KEY4", score: NaN, weak: true },
+    ],
+    20,
+  );
+  assert.equal(
+    rows.length,
+    1,
+    "threshold is inclusive and invalid scores are excluded",
+  );
+  h.corpus.scoreTopKAsync = async () => [
+    { key: "1/KEY2", score: 0.04, weak: true },
+  ];
+  await h.SWSection.renderBody(props, true);
+  assert.equal(h.body.querySelectorAll(".sw-row").length, 0);
+  assert.equal(summary, "");
 });
 
 test("switching items during a delayed render discards previous results; closed pane is lazy", async () => {
@@ -564,8 +603,8 @@ test("SQLite persists source modification times and vector revisions without sco
 test("K validation, identical document scores, and registered pane cleanup", async () => {
   const h = harness();
   for (const [v, expected] of [
-    [0, 10],
-    ["bad", 10],
+    [0, 20],
+    ["bad", 20],
     [999, 100],
     [2.8, 2],
     ["5", 5],
@@ -613,6 +652,7 @@ test("bootstrap loads scripts into a scope with Zotero globals and closes SQLite
   const h = harness();
   h.prefs.set("similar-works.backgroundIndexing", false);
   let closed = false;
+  const blockers = new Set();
   h.Zotero.DataDirectory = { dir: "/data" };
   h.Zotero.initializationPromise = Promise.resolve();
   h.Zotero.getMainWindows = () => [];
@@ -632,6 +672,10 @@ test("bootstrap loads scripts into a scope with Zotero globals and closes SQLite
       importESModule: () => ({
         AddonManager: { getAddonByID: async () => null },
         Sqlite: {
+          shutdown: {
+            addBlocker: (_name, blocker) => blockers.add(blocker),
+            removeBlocker: (blocker) => blockers.delete(blocker),
+          },
           openConnection: async () => ({
             execute: async (sql) =>
               sql.includes("COUNT(*)") ? [{ getResultByName: () => 0 }] : [],
@@ -674,6 +718,10 @@ test("bootstrap loads scripts into a scope with Zotero globals and closes SQLite
     2,
   );
   assert.equal(context.SWScope.SWSection._registered, "namespaced-pane");
+  assert.equal(blockers.size, 1);
+  // Profile shutdown must close our connection even before add-on shutdown runs.
+  await [...blockers][0]();
+  assert.equal(blockers.size, 0);
   await context.shutdown();
   assert.equal(closed, true);
   assert.equal(h.errors.length, 0);
@@ -718,6 +766,28 @@ test("refresh gives immediate feedback and resumes after database loading", asyn
   assert.match(h.body.querySelector(".sw-status").textContent, /Updated/);
   assert.equal(h.body["aria-busy"], "false");
   assert.equal(h.body.querySelector(".sw-progress"), null);
+});
+
+test("automatic display gives feedback while storage is being prepared", async () => {
+  const h = harness();
+  const q = h.item(1, "machine learning");
+  await h.SWIndexer.processItem(q);
+  await h.SWIndexer.processItem(h.item(2, "machine learning"));
+  let resolve;
+  h.corpus.progress.phase = "loading";
+  h.corpus._ready = new Promise((r) => {
+    resolve = r;
+  });
+  const pending = h.SWSection.renderBody({ body: h.body, item: q });
+  await new Promise((r) => setImmediate(r));
+  assert.match(h.body.querySelector(".sw-status").textContent, /Preparing/);
+  assert.equal(h.body.querySelector(".sw-computation-progress").hidden, false);
+  assert.equal(h.body["aria-busy"], "true");
+  h.corpus.progress.phase = "ready";
+  resolve();
+  await pending;
+  assert.equal(h.body.querySelectorAll(".sw-row").length, 1);
+  assert.equal(h.body["aria-busy"], "false");
 });
 
 test("online similarity reports completed candidate progress and obeys cancellation", async () => {

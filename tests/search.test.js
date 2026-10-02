@@ -8,6 +8,68 @@ const { SWCorpus } = require("../src/corpus.js");
 const noPause = async () => {};
 const noCancel = () => false;
 
+test("field counts preserve boundaries and reject truncated storage", async () => {
+  const counts = await SWSearch.extract({
+    title: "traffic",
+    abstract: "learning",
+    body: "radar radar",
+  });
+  const encoded = SWSearch.encodeCounts(counts);
+  const decoded = SWSearch.decodeCounts(encoded);
+  assert.deepEqual(decoded, counts);
+  assert.equal(decoded.fields[0].get(SWSearch.hash("w:traffic")), 1);
+  assert.equal(decoded.fields[2].get(SWSearch.hash("w:radar")), 2);
+  assert.throws(() => SWSearch.decodeCounts(encoded.slice(0, -1)), /Truncated/);
+  assert.deepEqual(
+    SWSearch.decodeCounts(SWSearch.encodeCounts(new Map([[123, 2]]))),
+    new Map([[123, 2]]),
+  );
+});
+
+test("BM25F normalizes fields separately before term saturation", async () => {
+  const index = new SWSearch.Index();
+  index.epochN = 10;
+  index.averageFieldLengths = [2, 8, 20];
+  const counts = await SWSearch.extract({
+    title: "traffic",
+    body: "radar radar",
+  });
+  const vector = index.fingerprint(counts);
+  const weights = new Map(vector);
+  // Both terms have the same IDF, so it cancels from the normalized ratio.
+  const titleTf = 4 / (0.7 + 0.3 / 2);
+  // Body contains two unigrams and one bigram.
+  const bodyTf = 2 / (0.25 + (0.75 * 3) / 20);
+  const expected = titleTf / (titleTf + 1.2) / (bodyTf / (bodyTf + 1.2));
+  const actual =
+    weights.get(SWSearch.hash("w:traffic")) /
+    weights.get(SWSearch.hash("w:radar"));
+  assert.ok(Math.abs(actual - expected) < 0.0001);
+});
+
+test("epoch rebuild preserves field averages with lazy database counts", async () => {
+  const index = new SWSearch.Index();
+  const a = await SWSearch.extract({
+    title: "traffic radar",
+    abstract: "learning",
+  });
+  const b = await SWSearch.extract({ body: "traffic radar" });
+  const stored = new Map([
+    ["1/A", SWSearch.encodeCounts(a)],
+    ["1/B", SWSearch.encodeCounts(b)],
+  ]);
+  index.add("1/A", a, true);
+  index.add("1/B", b, true);
+  for (const doc of index.docs.values()) doc.counts = null;
+  await index.rebuild(noPause, noCancel, async (doc) => stored.get(doc.key));
+  assert.deepEqual(index.averageFieldLengths, [1.5, 0.5, 1.5]);
+  assert.ok(index.docs.get("1/A").vector.length > 0);
+  const oldID = index.docs.get("1/A").id;
+  index.remove("1/A", stored.get("1/A"));
+  assert.equal(index.byID.has(oldID), false);
+  assert.equal(index.df.get(SWSearch.hash("w:traffic")), 1);
+});
+
 test("restart after a partial migration rebuilds fingerprints from stored counts", async () => {
   const corpus = new SWCorpus();
   const counts = SWSearch.encodeCounts(new Map([[123, 4]]));
@@ -236,4 +298,54 @@ test("results computed before an IDF epoch switch cannot be cached as new", asyn
   corpus.search.epoch = 2;
   await corpus.saveRecommendations("1/A", true, [], corpus.revision, "a", 1);
   assert.equal(await corpus.getRecommendations("1/A", true), null);
+});
+
+test("stored fingerprints bind BLOBs without being interpreted as batch parameters", async () => {
+  const corpus = new SWCorpus();
+  corpus.search.epoch = 3;
+  const doc = { key: "1/A", vector: [[1148, 1]], counts: null };
+  let persisted;
+  corpus._db = {
+    async execute(sql, params) {
+      // Gecko's Sqlite.sys.mjs interprets an object in position zero as a batch.
+      assert.notEqual(typeof params[0], "object");
+      assert.match(sql, /signature = \?2, epoch = \?3 WHERE key = \?1/);
+      assert.equal(params[0], doc.key);
+      assert.ok(params[1] instanceof Uint8Array);
+      assert.equal(params[2], 3);
+      persisted = SWSearch.decodeSignature(params[1]);
+    },
+  };
+  await corpus._writeFingerprint(doc);
+  assert.deepEqual([...persisted], doc.vector);
+});
+
+test("close waits for an in-progress open and transaction, then closes only once", async () => {
+  const corpus = new SWCorpus();
+  let finishOpen, finishTransaction;
+  let closes = 0,
+    removals = 0;
+  corpus._ready = new Promise((r) => {
+    finishOpen = r;
+  });
+  corpus._taskDrain = new Promise((r) => {
+    finishTransaction = r;
+  });
+  corpus._shutdownClient = { removeBlocker: () => removals++ };
+  const first = corpus.close();
+  assert.equal(corpus._stopped, true);
+  assert.equal(corpus.close(), first);
+  corpus._db = {
+    close: async () => {
+      closes++;
+    },
+  };
+  finishOpen();
+  await new Promise((r) => setImmediate(r));
+  assert.equal(closes, 0);
+  finishTransaction();
+  await first;
+  assert.equal(closes, 1);
+  assert.equal(removals, 1);
+  assert.equal(corpus._db, null);
 });

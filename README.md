@@ -10,13 +10,13 @@ Find similar papers in your Zotero library. Uses the existing full-text cache, w
 
 ## Features
 
-- Recommend up to 10 similar papers in the same library.
+- Find relevant papers in the same library.
 - Refresh recommendations and open results from the item sidebar.
 - Maintain a local incremental index for English, Chinese, Japanese, and Korean text.
 
 ## Installation
 
-Requires Zotero 7–10.
+Requires Zotero 10.
 
 Open **Tools → Plugins** in Zotero, select **Install Plugin From File** from the gear menu, choose the `.xpi` file, and restart Zotero.
 
@@ -24,7 +24,7 @@ Open **Tools → Plugins** in Zotero, select **Install Plugin From File** from t
 
 Select an item and expand Similar Works to calculate recommendations automatically. Cached results appear immediately. When an item changes, its affected recommendations update in the background. Results are revalidated after an IDF rebuild or after 24 hours. Refresh forces a new calculation; click a result to open it.
 
-Indexing runs slowly in the background. Queries use 256-feature, field-weighted BM25 fingerprints, Block-Max WAND to retrieve up to 300 candidates, and sparse cosine reranking. SimHash filters probable duplicates. Cached Top-50 lists update incrementally; the sidebar shows 10 results. First-time indexing must finish before full-text recommendations are available.
+Indexing runs gradually in the background. Recommendations use field-aware text matching and filter low-scoring results and probable duplicates. First-time indexing must finish before full-text recommendations are available.
 
 ## Data and backup
 
@@ -43,7 +43,7 @@ npm run release    # Run all checks and prepare local release files
 
 For local testing, install `dist/zotero-similar-works.xpi`, restart Zotero, and test the plugin. Rebuild and reinstall after changes.
 
-Release files are prepared in `release/v0.1.0/`: `zotero-similar-works-0.1.0.xpi`, `SHA256SUMS`, and `updates.json`. `npm run release` does not upload files. For publication, upload the XPI and `updates.json` as assets of the corresponding version’s Release.
+Local release files are prepared under `release/`, including the XPI, `SHA256SUMS`, and `updates.json`. This command does not upload files or create a Git tag.
 
 ## License
 

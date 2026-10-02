@@ -9,7 +9,7 @@ function SWPref(name, fallback) {
 
 function SWResultLimit(value) {
   var n = Number(value);
-  return Number.isFinite(n) && n >= 1 ? Math.min(100, Math.floor(n)) : 10;
+  return Number.isFinite(n) && n >= 1 ? Math.min(100, Math.floor(n)) : 20;
 }
 
 var SWIndexer = {
@@ -418,7 +418,7 @@ var SWIndexer = {
         : att;
       if (parent)
         hash +=
-          ":v2:" +
+          ":v3:" +
           SWTokenizer.swFnv1a(
             String(parent.getField("title") || "") +
               "\n" +
@@ -467,7 +467,7 @@ var SWIndexer = {
     var content = parts.join("\n");
     return {
       content: content,
-      hash: "m2" + SWTokenizer.swFnv1a(content),
+      hash: "m3" + SWTokenizer.swFnv1a(content),
       weak: true,
     };
   },
