@@ -104,6 +104,7 @@ var SWSection = {
         pluginID: SWPlugin.id,
         id: "similar-works-preferences",
         src: rootURI + "content/preferences.xhtml",
+        scripts: [rootURI + "content/preferences.js"],
       })
         .then((id) => {
           if (this._stopped) Zotero.PreferencePanes.unregister(id);

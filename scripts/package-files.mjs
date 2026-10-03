@@ -12,6 +12,7 @@ export const requiredFiles = [
   "src/section.js",
   "src/semantic.js",
   "content/preferences.xhtml",
+  "content/preferences.js",
   "runtime/worker.js",
   "runtime/ort-wasm-simd-threaded.mjs",
   "runtime/ort-wasm-simd-threaded.wasm",

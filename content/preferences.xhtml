@@ -2,22 +2,49 @@
   xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
   xmlns:html="http://www.w3.org/1999/xhtml"
 >
-  <html:section class="main-section">
-    <html:label for="similar-works-method">Recommendation method</html:label>
-    <html:select
-      id="similar-works-method"
-      preference="extensions.zotero.similar-works.recommendationMethod"
-    >
-      <html:option value="text">Text</html:option>
-      <html:option value="semantic">Semantic</html:option>
-    </html:select>
-    <html:p
-      >Text uses local text matching. Semantic uses local neural embeddings and
-      currently supports macOS.</html:p
-    >
-    <html:p
-      >Semantic downloads a small English model on first use, then builds its
-      index gradually. Document text stays on your computer.</html:p
-    >
-  </html:section>
+  <vbox class="main-section">
+    <hbox align="center">
+      <label
+        control="similar-works-method"
+        data-l10n-id="similar-works-pref-method"
+      />
+      <menulist
+        native="true"
+        id="similar-works-method"
+        aria-describedby="similar-works-method-help"
+        preference="extensions.zotero.similar-works.recommendationMethod"
+      >
+        <menupopup>
+          <menuitem value="text" data-l10n-id="similar-works-pref-text" />
+          <menuitem
+            value="semantic"
+            data-l10n-id="similar-works-pref-semantic"
+          />
+        </menupopup>
+      </menulist>
+    </hbox>
+    <description
+      id="similar-works-method-help"
+      data-l10n-id="similar-works-pref-method-help"
+    />
+    <hbox align="center">
+      <label
+        control="similar-works-limit"
+        data-l10n-id="similar-works-pref-limit"
+      />
+      <html:input
+        id="similar-works-limit"
+        type="number"
+        min="1"
+        max="100"
+        style="width: 5em"
+        preference="extensions.zotero.similar-works.maxRecommendations"
+      />
+    </hbox>
+    <checkbox
+      native="true"
+      data-l10n-id="similar-works-pref-metadata"
+      preference="extensions.zotero.similar-works.allowMetadataOnlyRecommendations"
+    />
+  </vbox>
 </vbox>

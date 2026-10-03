@@ -71,6 +71,20 @@ startup = async function(data) {
       await doc.l10n.translateFragment(body);
       if (!body.querySelector("progress").getAttribute("aria-label")) throw new Error("Missing localized progress label");
       body.remove();
+      const settings = Zotero.Utilities.Internal.openPreferences("similar-works-preferences");
+      let method;
+      for (let n = 0; n < 100; n++) {
+        method = settings.document.getElementById("similar-works-method");
+        if (method?.querySelector("menuitem")?.label) break;
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+      if (!method || !method.querySelector("menuitem").label || !settings.document.getElementById("similar-works-limit")) throw new Error("Settings controls did not load");
+      method.value = "semantic";
+      method.dispatchEvent(new settings.Event("command", { bubbles: true }));
+      if (Zotero.Prefs.get(method.getAttribute("preference"), true) !== "semantic") throw new Error("Settings selection was not saved");
+      method.value = "text";
+      method.dispatchEvent(new settings.Event("command", { bubbles: true }));
+      settings.close();
       const corpus = SWScope.SWIndexer.corpus;
       if (!corpus._db) throw new Error("Index did not open");
       await shutdown(data, 2);
@@ -114,7 +128,7 @@ try {
   if (code !== 0 || !result.ok)
     throw new Error(JSON.stringify({ code, result }));
   console.log(
-    "PASS Packaged startup, single registration, localized progress and shutdown cleanup.",
+    "PASS Packaged startup, single registration, localized progress, native settings saving and shutdown cleanup.",
   );
   passed = true;
 } finally {

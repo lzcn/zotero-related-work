@@ -1,4 +1,4 @@
-// Internal defaults. Only recommendationMethod is exposed in settings.
+// User settings and internal indexing defaults.
 pref("extensions.zotero.similar-works.maxRecommendations", 20);
 pref("extensions.zotero.similar-works.minimumSimilarity", "0.05");
 pref("extensions.zotero.similar-works.minTokenLength", 2);
