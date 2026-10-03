@@ -14,3 +14,6 @@ similar-works-updated = 已更新
 similar-works-cached = 已缓存
 similar-works-updating = 更新中...
 similar-works-preparing = 正在准备推荐...
+
+similar-works-progress =
+    .aria-label = 相似度计算进度

@@ -4,53 +4,33 @@
 
 [中文](README.zh-CN.md)
 
-[![Built with ChatGPT](https://img.shields.io/badge/Built_with-ChatGPT-10A37F?style=flat)](https://chatgpt.com/) [![Built with DeepSeek](https://img.shields.io/badge/Built_with-DeepSeek-4D6BFE?style=flat)](https://www.deepseek.com/)
+Find similar papers in the same Zotero library using the existing full-text cache. Text processing stays on your computer.
 
-Find similar papers in your Zotero library. Uses the existing full-text cache, with all processing on your computer.
+## Install and use
 
-## Features
+Requires Zotero 10. Download the XPI from the [latest release](https://github.com/lzcn/zotero-similar-works/releases/latest), install it through **Tools → Plugins → Install Plugin From File**, and restart Zotero.
 
-- Find relevant papers in the same library.
-- Refresh recommendations and open results from the item sidebar.
-- Maintain a local incremental index for English, Chinese, Japanese, and Korean text.
+Select a paper and expand **Similar Works** in the sidebar. Refresh recalculates recommendations; clicking a result opens the paper. Background indexing and changed items update cached results. Recommendations may be incomplete until indexing finishes.
 
-## Installation
+In **Settings → Similar Works**, choose **Text** or **Semantic**. Semantic currently supports macOS and uses MiniLM-L6, mainly for English papers. Its first use downloads about 23 MB of weights plus tokenizer files from Hugging Face, falling back to hf-mirror.com. It stores one local vector per paper; switching to Text pauses semantic indexing.
 
-Requires Zotero 10. Download the `.xpi` file from the [latest release](https://github.com/lzcn/zotero-similar-works/releases/latest).
+## Data
 
-Open **Tools → Plugins** in Zotero, select **Install Plugin From File** from the gear menu, choose the `.xpi` file, and restart Zotero.
-
-## Usage
-
-In **Settings → Similar Works**, choose **Text** for text matching or **Semantic** for local neural embeddings. Semantic currently supports macOS and uses MiniLM-L6, primarily for English papers. Its first use downloads about 23 MB of model weights plus tokenizer files; downloads use Hugging Face, with hf-mirror.com as a fallback. Document text stays on your computer.
-
-Select an item and expand Similar Works to calculate recommendations automatically. Cached results appear immediately. When an item changes, its affected recommendations update in the background. Results are revalidated after an IDF rebuild or after 24 hours. Refresh forces a new calculation; click a result to open it.
-
-Semantic indexing runs one item at a time in a separate worker and stores one vector per paper. Existing vectors are reused; changed items are rebuilt. Recommendations are incomplete until background indexing catches up. Switching to Text pauses semantic indexing.
-
-Indexing runs gradually in the background. Recommendations use field-aware text matching and filter low-scoring results and probable duplicates. First-time indexing must finish before full-text recommendations are available.
-
-## Data and backup
-
-The index is stored in `similar-works/similarity.sqlite` in your Zotero data directory. It can be rebuilt and does not modify Zotero’s original full-text database.
-
-To check background indexing progress, read `similar-works/index-status.json` in the Zotero data directory. It records the indexed and total item counts and the current state.
+The rebuildable index is in `similar-works/similarity.sqlite` under the Zotero data directory. Progress is recorded in `similar-works/index-status.json`. The plugin does not modify Zotero's original full-text database.
 
 ## Development
 
-Requires Node.js 22.13+ (22.x) or 24+. Run these commands in the plugin directory:
+Use Node.js 22.13+ (22.x) or 24+. Run `npm ci`, then `npm run check`.
 
-```sh
-npm ci             # Install locked dependencies
-npm run build      # Check types and build the XPI
-npm run check      # Check formatting, lint, tests, and build
-npm run release    # Run all checks and prepare local release files
-```
+- `npm run build`: reuse valid output when inputs have not changed.
+- `npm run build:force`: rebuild from scratch.
+- `npm run check`: formatting, lint, tests and type checking; reuse valid XPI output.
+- `npm run release`: full checks, then prepare the XPI, `SHA256SUMS` and `updates.json` under `release/v<version>/`.
 
-For local testing, install `dist/zotero-similar-works.xpi`, restart Zotero, and test the plugin. Rebuild and reinstall after changes.
+`npm run test:host` verifies packaged startup, localization and cleanup with temporary profile and data directories. Set `ZOTERO_BINARY` to select another host executable.
 
-Local release files are prepared under `release/`, including the XPI, `SHA256SUMS`, and `updates.json`. This command does not upload files or create a Git tag.
+Build output: `dist/zotero-similar-works.xpi`. Install and verify changes in Zotero. Release preparation does not create a tag or upload files. Shared working rules live in the plugin workspace's root `AGENTS.md`.
 
 ## License
 
-Copyright © 2026 Zhi Lu. [AGPL-3.0-or-later](LICENSE). Third-party libraries keep their own licenses.
+Copyright © 2026 Zhi Lu. [AGPL-3.0-or-later](LICENSE). Third-party licenses remain applicable.

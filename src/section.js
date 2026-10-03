@@ -129,7 +129,7 @@ var SWSection = {
     progress.className = "sw-computation-progress";
     progress.max = 100;
     progress.hidden = true;
-    progress.setAttribute("aria-label", "Similarity calculation progress");
+    progress.setAttribute("data-l10n-id", "similar-works-progress");
     body.replaceChildren(status, progress, list);
   },
 

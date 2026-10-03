@@ -13,14 +13,16 @@
     "node": "^22.13.0 || >=24.0.0"
   },
   "scripts": {
-    "build": "npm run typecheck && node scripts/build.mjs",
+    "build": "node scripts/build.mjs",
     "lint": "npm run lint:check",
     "lint:check": "prettier --check . && eslint .",
     "lint:fix": "prettier --write . && eslint . --fix",
     "test": "node tests/unit.test.js && node --test tests/integration.test.js tests/lifecycle.test.js tests/search.test.js tests/semantic.test.js tests/package.test.mjs",
-    "check": "npm run lint:check && npm test && npm run build",
+    "check": "npm run lint:check && node scripts/build.mjs --check && npm test",
     "release": "npm run check && node scripts/package-release.mjs",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "build:force": "node scripts/build.mjs --force",
+    "test:host": "node scripts/test-host.mjs"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",

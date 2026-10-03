@@ -14,3 +14,6 @@ similar-works-updated = Updated
 similar-works-cached = Cached results
 similar-works-updating = Updating...
 similar-works-preparing = Preparing recommendations...
+
+similar-works-progress =
+    .aria-label = Similarity calculation progress

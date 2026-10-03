@@ -738,6 +738,7 @@ test("Fluent section translations preserve native child controls in both locales
     assert.match(ftl, /^similar-works-header =\s*\n\s+\.label = .+$/m);
     assert.match(ftl, /^similar-works-sidenav =\s*\n\s+\.tooltiptext = .+$/m);
     assert.match(ftl, /^similar-works-refresh =\s*\n\s+\.tooltiptext = .+$/m);
+    assert.match(ftl, /^similar-works-progress =\s*\n\s+\.aria-label = .+$/m);
   }
 });
 
