@@ -667,9 +667,12 @@ var SWCorpus = class {
         }
       }
     }
-    let processed = 0;
+    const changedLibrary = changedKey.split("/")[0];
+    let sliceStarted = Date.now();
     for (const [cacheKey, cached] of this._recommendations) {
-      const original = JSON.stringify(cached);
+      // Comparing against the serialized form is only needed to decide whether
+      // a persistence write is required, so skip it entirely without a database.
+      const original = this._db ? JSON.stringify(cached) : null;
       const [queryKey, includeWeak] = JSON.parse(cacheKey);
       const query = this.search.docs.get(queryKey);
       const before = cached.matches.some((m) => m.key === changedKey);
@@ -677,7 +680,7 @@ var SWCorpus = class {
       else if (
         cached.epoch === this.search.epoch &&
         query &&
-        queryKey.split("/")[0] === changedKey.split("/")[0]
+        queryKey.split("/")[0] === changedLibrary
       ) {
         const matches = cached.matches.filter((m) => m.key !== changedKey);
         if (before) cached.dirty = true; // Deletion can expose an unknown next neighbor.
@@ -714,10 +717,14 @@ var SWCorpus = class {
           "UPDATE recommendations SET payload = ? WHERE cacheKey = ?",
           [JSON.stringify(cached), cacheKey],
         );
-      if (++processed % 20 === 0) {
+      // Yield on a CPU-time budget instead of a fixed item count. A full scan of
+      // the 1000-entry cache is only a few milliseconds, so yielding every 20
+      // items turned one change into seconds of idle waiting during bulk imports.
+      if (Date.now() - sliceStarted >= 30) {
         await swYield(40);
         await this.yieldToForeground();
         if (this._stopped) break;
+        sliceStarted = Date.now();
       }
     }
     while (this._recommendations.size > 1000)
