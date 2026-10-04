@@ -307,10 +307,16 @@ function swFnv1a(str) {
   return h.toString(16);
 }
 
+/** @param {string} word @returns {boolean} */
+function swIsStopword(word) {
+  return SW_EN_STOPWORDS.has(word);
+}
+
 var SWTokenizer = {
   termFreq: swTermFreq,
   tokenize: swTokenizeText,
   swFnv1a: swFnv1a,
+  isStopword: swIsStopword,
 };
 
 if (typeof module !== "undefined" && module.exports) {
@@ -318,5 +324,6 @@ if (typeof module !== "undefined" && module.exports) {
     swTokenizeText: swTokenizeText,
     swTermFreq: swTermFreq,
     swFnv1a: swFnv1a,
+    swIsStopword: swIsStopword,
   };
 }

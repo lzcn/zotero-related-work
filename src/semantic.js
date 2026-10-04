@@ -261,36 +261,47 @@ var SWSemantic = {
   pool(vectors, weights) {
     const pooled = new Float32Array(this.dimensions);
     for (let i = 0; i < vectors.length; i++) {
-      if (vectors[i].length !== this.dimensions)
+      const vector = vectors[i];
+      if (vector.length !== this.dimensions)
         throw new Error("Invalid embedding dimensions");
-      for (let j = 0; j < pooled.length; j++)
-        pooled[j] += vectors[i][j] * weights[i];
+      const weight = weights[i];
+      for (let j = 0; j < pooled.length; j++) pooled[j] += vector[j] * weight;
     }
-    const norm = Math.sqrt(pooled.reduce((sum, n) => sum + n * n, 0));
+    return this.normalize(pooled);
+  },
+
+  normalize(vector) {
+    let sum = 0;
+    for (let i = 0; i < vector.length; i++) sum += vector[i] * vector[i];
+    const norm = Math.sqrt(sum);
     if (!Number.isFinite(norm) || !norm)
       throw new Error("Invalid embedding values");
-    return pooled.map((n) => n / norm);
+    for (let i = 0; i < vector.length; i++) vector[i] = vector[i] / norm;
+    return vector;
   },
 
   encode(vector) {
-    const bytes = new Uint8Array(vector.length * 4),
-      view = new DataView(bytes.buffer);
-    vector.forEach((n, i) => view.setFloat32(i * 4, n, true));
+    const bytes = new Uint8Array(vector.length * 4);
+    if (vector instanceof Float32Array) {
+      bytes.set(
+        new Uint8Array(vector.buffer, vector.byteOffset, vector.byteLength),
+      );
+      return bytes;
+    }
+    const view = new DataView(bytes.buffer);
+    for (let i = 0; i < vector.length; i++)
+      view.setFloat32(i * 4, vector[i], true);
     return bytes;
   },
 
   decode(bytes) {
     if (bytes.length !== this.dimensions * 4)
       throw new Error("Invalid stored embedding");
-    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-    return this.pool(
-      [
-        Array.from({ length: this.dimensions }, (_, i) =>
-          view.getFloat32(i * 4, true),
-        ),
-      ],
-      [1],
-    );
+    // Reinterpret without a per-element DataView round trip. Copy so the typed
+    // view is always four-byte aligned regardless of the BLOB's byteOffset.
+    const copy = new Uint8Array(bytes.byteLength);
+    copy.set(bytes);
+    return this.normalize(new Float32Array(copy.buffer));
   },
 
   async search(
@@ -303,7 +314,10 @@ var SWSemantic = {
     const query = this.vectors.get(key);
     if (!query || this.corpus.docs.get(key)?.hash !== query.hash) return null;
     const best = new SWSearch.Heap(k);
-    let done = 0;
+    const qv = query.vector,
+      dims = this.dimensions;
+    let done = 0,
+      sliceStarted = Date.now();
     for (const [candidate, doc] of this.vectors) {
       if (this._stopped || cancelled()) return [];
       const source = this.corpus.docs.get(candidate);
@@ -312,15 +326,20 @@ var SWSemantic = {
         source?.hash === doc.hash &&
         (!filter || filter(candidate, source))
       ) {
+        const dv = doc.vector;
         let score = 0;
-        for (let i = 0; i < this.dimensions; i++)
-          score += query.vector[i] * doc.vector[i];
+        for (let i = 0; i < dims; i++) score += qv[i] * dv[i];
         if (score > 0)
           best.add([candidate, Math.min(1, score), candidate, source.weak]);
       }
       if (++done % 100 === 0) {
         progress({ done, total: this.vectors.size });
-        await swYield(0);
+        // Yield on elapsed CPU time rather than every 100 vectors; a 5000-doc
+        // scan only takes a few milliseconds and previously paid hundreds of timers.
+        if (Date.now() - sliceStarted >= 6) {
+          await swYield(0);
+          sliceStarted = Date.now();
+        }
       }
     }
     progress({ done, total: done });

@@ -9,6 +9,7 @@ declare const SWTokenizer: {
   termFreq: typeof import("../src/tokenizer").swTermFreq;
   tokenize: typeof import("../src/tokenizer").swTokenizeText;
   swFnv1a: typeof import("../src/tokenizer").swFnv1a;
+  isStopword: typeof import("../src/tokenizer").swIsStopword;
 };
 declare namespace Zotero {
   const Fulltext: {

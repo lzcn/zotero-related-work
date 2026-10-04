@@ -19,9 +19,11 @@ var SWSearch = (() => {
     return counts.fields || [new Map(), new Map(), counts];
   }
   function fieldLengths(counts) {
-    return fieldsOf(counts).map((field) =>
-      [...field.values()].reduce((sum, n) => sum + n, 0),
-    );
+    return fieldsOf(counts).map((field) => {
+      let sum = 0;
+      for (const n of field.values()) sum += n;
+      return sum;
+    });
   }
   function hash(text, seed = 2166136261) {
     let h = seed;
@@ -32,6 +34,42 @@ var SWSearch = (() => {
     h ^= h >>> 13;
     h = Math.imul(h, 0xc2b2ae35);
     return (h ^ (h >>> 16)) >>> 0;
+  }
+  const FNV_PRIME = 16777619,
+    FNV_OFFSET = 2166136261;
+  function avalanche(h) {
+    h ^= h >>> 16;
+    h = Math.imul(h, 0x85ebca6b);
+    h ^= h >>> 13;
+    h = Math.imul(h, 0xc2b2ae35);
+    return (h ^ (h >>> 16)) >>> 0;
+  }
+  // Specialized FNV-1a kernels that fold the feature prefix into the state
+  // instead of allocating "w:token", "b:a b" or "c:bigram" strings first.
+  function hashWord(token) {
+    let h = Math.imul(FNV_OFFSET ^ 119, FNV_PRIME);
+    h = Math.imul(h ^ 58, FNV_PRIME);
+    for (let i = 0; i < token.length; i++)
+      h = Math.imul(h ^ token.charCodeAt(i), FNV_PRIME);
+    return avalanche(h);
+  }
+  function hashBigram(previous, token) {
+    let h = Math.imul(FNV_OFFSET ^ 98, FNV_PRIME);
+    h = Math.imul(h ^ 58, FNV_PRIME);
+    for (let i = 0; i < previous.length; i++)
+      h = Math.imul(h ^ previous.charCodeAt(i), FNV_PRIME);
+    h = Math.imul(h ^ 32, FNV_PRIME);
+    for (let i = 0; i < token.length; i++)
+      h = Math.imul(h ^ token.charCodeAt(i), FNV_PRIME);
+    return avalanche(h);
+  }
+  function hashCJK(word, start, size) {
+    let h = Math.imul(FNV_OFFSET ^ 99, FNV_PRIME);
+    h = Math.imul(h ^ 58, FNV_PRIME);
+    const end = start + size;
+    for (let i = start; i < end; i++)
+      h = Math.imul(h ^ word.charCodeAt(i), FNV_PRIME);
+    return avalanche(h);
   }
   function clean(text) {
     text = String(text || "")
@@ -69,22 +107,28 @@ var SWSearch = (() => {
         )
       ) {
         previous = "";
-        const chars = Array.from(word);
-        for (const n of [2, 3])
-          for (let i = 0; i + n <= chars.length; i++)
-            yield hash(`c:${chars.slice(i, i + n).join("")}`);
+        if (/[\uD800-\uDBFF]/.test(word)) {
+          const chars = Array.from(word);
+          for (const n of [2, 3])
+            for (let i = 0; i + n <= chars.length; i++)
+              yield hash(`c:${chars.slice(i, i + n).join("")}`);
+        } else {
+          for (let n = 2; n <= 3; n++)
+            for (let i = 0; i + n <= word.length; i++)
+              yield hashCJK(word, i, n);
+        }
       } else {
         if (
           word.length < 2 ||
           /^\d+$/.test(word) ||
-          SWTokenizer.termFreq(word).size === 0
+          SWTokenizer.isStopword(word)
         ) {
           previous = "";
           continue;
         }
         const token = /^[a-z]+$/.test(word) ? swPorterStem(word) : word;
-        yield hash(`w:${token}`);
-        if (previous) yield hash(`b:${previous} ${token}`);
+        yield hashWord(token);
+        if (previous) yield hashBigram(previous, token);
         previous = token;
       }
     }
@@ -221,10 +265,14 @@ var SWSearch = (() => {
   function simhash(counts) {
     const sums = new Float64Array(64);
     for (const [id, count] of counts) {
-      const bits = [hash(String(id), 0x811c9dc5), hash(String(id), 0x9e3779b9)],
+      const text = String(id),
+        bits0 = hash(text, 0x811c9dc5),
+        bits1 = hash(text, 0x9e3779b9),
         weight = 1 + Math.log(count);
-      for (let i = 0; i < 64; i++)
-        sums[i] += (bits[i >>> 5] >>> (i & 31)) & 1 ? weight : -weight;
+      for (let i = 0; i < 32; i++) {
+        sums[i] += (bits0 >>> i) & 1 ? weight : -weight;
+        sums[32 + i] += (bits1 >>> i) & 1 ? weight : -weight;
+      }
     }
     const result = new Uint32Array(2);
     for (let i = 0; i < 64; i++)
@@ -336,20 +384,38 @@ var SWSearch = (() => {
       this.max = 0;
     }
     insert(id, weight) {
-      const at = seek(this, id);
-      if (this.length === this.ids.length) {
-        const ids = new Uint32Array(this.length * 2),
-          weights = new Float64Array(this.length * 2);
-        ids.set(this.ids);
-        weights.set(this.weights);
-        this.ids = ids;
-        this.weights = weights;
+      const length = this.length;
+      if (!length || this.ids[length - 1] < id) {
+        // Documents are indexed with monotonically increasing ids, so the
+        // common path appends and skips the binary search and shift.
+        if (length === this.ids.length) {
+          const capacity = length * 2 || 4,
+            ids = new Uint32Array(capacity),
+            weights = new Float64Array(capacity);
+          ids.set(this.ids);
+          weights.set(this.weights);
+          this.ids = ids;
+          this.weights = weights;
+        }
+        this.ids[length] = id;
+        this.weights[length] = weight;
+        this.length = length + 1;
+      } else {
+        const at = seek(this, id);
+        if (length === this.ids.length) {
+          const ids = new Uint32Array(length * 2),
+            weights = new Float64Array(length * 2);
+          ids.set(this.ids);
+          weights.set(this.weights);
+          this.ids = ids;
+          this.weights = weights;
+        }
+        this.ids.copyWithin(at + 1, at, length);
+        this.weights.copyWithin(at + 1, at, length);
+        this.ids[at] = id;
+        this.weights[at] = weight;
+        this.length = length + 1;
       }
-      this.ids.copyWithin(at + 1, at, this.length);
-      this.weights.copyWithin(at + 1, at, this.length);
-      this.ids[at] = id;
-      this.weights[at] = weight;
-      this.length++;
       const block = Math.floor(id / BLOCK_SIZE);
       this.blocks.set(block, Math.max(this.blocks.get(block) || 0, weight));
       this.max = Math.max(this.max, weight);

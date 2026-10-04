@@ -1,7 +1,11 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 global.swPorterStem = require("../src/stemmer.js").swPorterStem;
-global.SWTokenizer = { termFreq: require("../src/tokenizer.js").swTermFreq };
+const tokenizer = require("../src/tokenizer.js");
+global.SWTokenizer = {
+  termFreq: tokenizer.swTermFreq,
+  isStopword: tokenizer.swIsStopword,
+};
 const { SWSearch } = require("../src/search.js");
 global.SWSearch = SWSearch;
 const { SWCorpus } = require("../src/corpus.js");
