@@ -69,59 +69,76 @@ var SWTags = {
   // Split naming boundaries without stemming or guessing unbroken words.
   words: swTagWords,
 
-  formatName(name, options = this.namingOptions()) {
-    const words = this.words(
-      name,
-      options.style === "space" && options.preserveHyphens,
+  _terms: new Map(),
+  _termLength: 1,
+
+  async loadTerms(rootURI) {
+    const catalog = JSON.parse(
+      await Zotero.File.getResourceAsync(rootURI + "data/tag-terms.json"),
     );
-    if (!words.length) return "";
-    const lower = (word) => (/[+#.]/u.test(word) ? word : word.toLowerCase());
-    const styles = {
-      space: () =>
-        words
-          .map((word) => {
-            if (options.spaceCase === "keep" || !options.spaceCase) return word;
-            if (/[+#.]/u.test(word) || /^[\p{Lu}\p{Nd}]+$/u.test(word))
-              return word;
-            const text = word.toLowerCase();
-            return options.spaceCase === "title"
-              ? text[0].toUpperCase() + text.slice(1)
-              : text;
-          })
-          .join(" "),
-      kebab: () => words.map(lower).join("-"),
-      snake: () => words.map(lower).join("_"),
-      camel: () =>
-        words
-          .map((word, i) => {
-            if (!i) return lower(word);
-            if (/[+#.]/u.test(word) || /^[\p{Lu}\p{Nd}]+$/u.test(word))
-              return word;
-            const text = word.toLowerCase();
-            return text[0].toUpperCase() + text.slice(1);
-          })
-          .join(""),
-    };
-    const text = (styles[options.style] || styles.space)();
-    return (options.hashtag ? "#" : "") + text;
+    if (
+      !catalog.terms ||
+      Object.entries(catalog.terms).some(
+        ([key, name]) => !key || typeof name !== "string" || !name,
+      )
+    )
+      throw new Error("Invalid tag term dictionary");
+    if (this._stopped) return;
+    this._terms = new Map(Object.entries(catalog.terms));
+    this._termLength = Math.max(
+      1,
+      ...[...this._terms.keys()].map((key) => key.split(" ").length),
+    );
+  },
+
+  formatName(name, options = this.namingOptions()) {
+    const words = this.normalizeName(name)
+      .replace(/^#+\s*/u, "")
+      .split(/\s+/u)
+      .flatMap((word) =>
+        this._terms.has(word.toLowerCase()) ? [word] : word.split("_"),
+      )
+      .filter(Boolean);
+    const output = [];
+    for (let i = 0; i < words.length; ) {
+      let canonical;
+      let length = Math.min(this._termLength, words.length - i);
+      for (; length > 0; length--) {
+        canonical = this._terms.get(
+          words
+            .slice(i, i + length)
+            .join(" ")
+            .toLowerCase(),
+        );
+        if (canonical) break;
+      }
+      if (canonical) {
+        output.push(canonical);
+        i += length;
+        continue;
+      }
+      const word = words[i++];
+      // Preserve unknown acronyms, mixed-case names and language symbols.
+      const preserve =
+        /^[\p{Lu}\p{Nd}-]+$/u.test(word) ||
+        /\p{Ll}.*\p{Lu}/u.test(word) ||
+        /[+#.]/u.test(word);
+      let text = preserve ? word : word.toLowerCase();
+      if (!preserve && (options.style === "title" || !output.length))
+        text = text.replace(/^\p{L}/u, (c) => c.toUpperCase());
+      output.push(text);
+    }
+    return output.length ? (options.hashtag ? "#" : "") + output.join(" ") : "";
   },
 
   namingOptions() {
     return {
       style:
         typeof SWPref === "undefined"
-          ? "space"
-          : SWPref("tagNameStyle", "space"),
+          ? "sentence"
+          : SWPref("tagNameStyle", "sentence"),
       hashtag:
         typeof SWPref === "undefined" ? false : SWPref("tagHashtag", false),
-      spaceCase:
-        typeof SWPref === "undefined"
-          ? "lower"
-          : SWPref("tagSpaceCase", "lower"),
-      preserveHyphens:
-        typeof SWPref === "undefined"
-          ? true
-          : SWPref("tagPreserveHyphens", true),
     };
   },
 
@@ -357,10 +374,75 @@ var SWTags = {
   },
 
   duplicateGroups(names) {
+    const entries = [...new Set(names)].filter((name) => swTagKey(name));
+    const parents = entries.map((_, i) => i);
+    const root = (i) => {
+      while (parents[i] !== i) {
+        parents[i] = parents[parents[i]];
+        i = parents[i];
+      }
+      return i;
+    };
+    const join = (a, b) => {
+      parents[root(b)] = root(a);
+    };
+    const keys = new Map();
+    const grams = new Map();
+    const fingerprints = [];
+    const singular = (word) => {
+      if (word.length < 5) return word;
+      if (/ies$/u.test(word)) return word.slice(0, -3) + "y";
+      if (/(?:ches|shes|xes|zes|sses)$/u.test(word)) return word.slice(0, -2);
+      return word.endsWith("s") && !/(?:ss|us|is)$/u.test(word)
+        ? word.slice(0, -1)
+        : word;
+    };
+    for (const [i, name] of entries.entries()) {
+      const words = swTagWords(
+        this.formatName(name, { style: "sentence", hashtag: false }),
+      ).map((word) => singular(word.toLowerCase()));
+      const normalized = words.join(" ");
+      // Suggestions only: order, plural forms and separator differences can
+      // describe the same topic. Actual native names remain untouched.
+      for (const key of [
+        swTagKey(name),
+        words.slice().sort().join(" "),
+        normalized.replace(/ /gu, ""),
+      ]) {
+        if (keys.has(key)) join(i, keys.get(key));
+        else keys.set(key, i);
+      }
+      const text = normalized.replace(/ /gu, "");
+      const signature = (text.match(/\d+/gu) || []).join("|");
+      const pairs = new Set();
+      // Short names and punctuation carry meaning (C, C++, C#, model versions).
+      if (text.length >= 8 && /^[\p{L}\p{N}]+$/u.test(text))
+        for (let n = 0; n < text.length - 2; n++)
+          pairs.add(text.slice(n, n + 3));
+      const overlaps = new Map();
+      for (const gram of pairs)
+        for (const other of grams.get(signature + ":" + gram) || [])
+          overlaps.set(other, (overlaps.get(other) || 0) + 1);
+      for (const [other, overlap] of overlaps) {
+        const previous = fingerprints[other];
+        if (
+          Math.abs(text.length - previous.length) <=
+            Math.max(text.length, previous.length) * 0.2 &&
+          (2 * overlap) / (pairs.size + previous.size) >= 0.8
+        )
+          join(i, other);
+      }
+      fingerprints.push({ length: text.length, size: pairs.size });
+      for (const gram of pairs) {
+        const key = signature + ":" + gram;
+        const bucket = grams.get(key) || [];
+        bucket.push(i);
+        grams.set(key, bucket);
+      }
+    }
     const groups = new Map();
-    for (const name of new Set(names)) {
-      const key = swTagKey(name);
-      if (!key) continue;
+    for (const [i, name] of entries.entries()) {
+      const key = root(i);
       const group = groups.get(key) || [];
       group.push(name);
       groups.set(key, group);

@@ -655,6 +655,10 @@ test("bootstrap loads scripts into a scope with Zotero globals and closes SQLite
   h.prefs.set("similar-works.backgroundIndexing", false);
   let closed = false;
   const blockers = new Set();
+  h.Zotero.File = {
+    getResourceAsync: async () =>
+      fs.readFileSync(path.join(__dirname, "../data/tag-terms.json"), "utf8"),
+  };
   h.Zotero.DataDirectory = { dir: "/data" };
   h.Zotero.initializationPromise = Promise.resolve();
   h.Zotero.getMainWindows = () => [];

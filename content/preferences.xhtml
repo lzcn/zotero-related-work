@@ -63,42 +63,14 @@
         preference="extensions.zotero.similar-works.tagNameStyle"
       >
         <menupopup>
-          <menuitem value="space" data-l10n-id="similar-works-pref-tag-space" />
-          <menuitem value="kebab" data-l10n-id="similar-works-pref-tag-kebab" />
-          <menuitem value="snake" data-l10n-id="similar-works-pref-tag-snake" />
-          <menuitem value="camel" data-l10n-id="similar-works-pref-tag-camel" />
+          <menuitem
+            value="sentence"
+            data-l10n-id="similar-works-pref-tag-sentence"
+          />
+          <menuitem value="title" data-l10n-id="similar-works-pref-tag-title" />
         </menupopup>
       </menulist>
     </hbox>
-    <hbox align="center">
-      <label
-        control="similar-works-tag-case"
-        data-l10n-id="similar-works-pref-tag-case"
-      />
-      <menulist
-        native="true"
-        id="similar-works-tag-case"
-        preference="extensions.zotero.similar-works.tagSpaceCase"
-      >
-        <menupopup>
-          <menuitem value="keep" data-l10n-id="similar-works-pref-case-keep" />
-          <menuitem
-            value="lower"
-            data-l10n-id="similar-works-pref-case-lower"
-          />
-          <menuitem
-            value="title"
-            data-l10n-id="similar-works-pref-case-title"
-          />
-        </menupopup>
-      </menulist>
-    </hbox>
-    <checkbox
-      native="true"
-      id="similar-works-tag-hyphens"
-      data-l10n-id="similar-works-pref-tag-hyphens"
-      preference="extensions.zotero.similar-works.tagPreserveHyphens"
-    />
     <checkbox
       native="true"
       id="similar-works-tag-hashtag"

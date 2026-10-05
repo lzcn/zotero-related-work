@@ -60,7 +60,7 @@ similar-works-state-downloading = Downloading model
 similar-works-tags-suggested = Suggested tags
 similar-works-tags-organize = Tag Manager
 similar-works-tags-menu =
-    .label = Tag Manager…
+    .label = Tag Manager
 similar-works-tags-add = Add selected tags
 similar-works-tags-empty = No tags suggested yet.
 similar-works-tags-added = Added { $count } tags.
@@ -85,14 +85,6 @@ similar-works-tags-invalid-name = Enter a non-empty tag name without control cha
 similar-works-pref-tags-heading = Tag names
 similar-works-pref-tag-style =
     .value = Name format
-similar-works-pref-tag-space =
-    .label = Spaces (Deep Learning)
-similar-works-pref-tag-kebab =
-    .label = Hyphens (deep-learning)
-similar-works-pref-tag-snake =
-    .label = Underscores (deep_learning)
-similar-works-pref-tag-camel =
-    .label = Camel case (deepLearning)
 similar-works-pref-tag-hashtag =
     .label = Add a leading #
 similar-works-pref-tag-help = Used for new tags and formatting previews.
@@ -107,7 +99,7 @@ similar-works-tags-protected = A selected name is excluded. Refresh the list or 
 similar-works-tags-select-all = Select all
 similar-works-tags-selection-count = { $selected } selected · { $total } tags
 similar-works-tags-action = Action
-similar-works-tags-format = Rename / Format
+similar-works-tags-format = Rename
 similar-works-tags-merge-action = Merge
 similar-works-tags-preparing = Preparing preview…
 similar-works-tags-format-preview = { $count } names to change · { $items } affected items · { $merges } merges
@@ -130,17 +122,12 @@ similar-works-tags-deleted = Deleted { $count } tags.
 
 similar-works-tags-renamed = Renamed to “{ $name }”.
 
-similar-works-pref-tag-case =
-    .value = Space-separated names
 
-similar-works-pref-case-keep =
-    .label = Original case
 
-similar-works-pref-case-lower =
-    .label = lowercase
 
-similar-works-pref-case-title =
+
+
+similar-works-pref-tag-sentence =
+    .label = Sentence case
+similar-works-pref-tag-title =
     .label = Title Case
-
-similar-works-pref-tag-hyphens =
-    .label = Preserve hyphenated words in space-separated names

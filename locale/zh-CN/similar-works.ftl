@@ -60,7 +60,7 @@ similar-works-state-downloading = 正在下载模型
 similar-works-tags-suggested = 推荐标签
 similar-works-tags-organize = 标签管理
 similar-works-tags-menu =
-    .label = 标签管理…
+    .label = 标签管理
 similar-works-tags-add = 添加选中的标签
 similar-works-tags-empty = 暂无推荐标签。
 similar-works-tags-added = 已添加 { $count } 个标签。
@@ -85,14 +85,6 @@ similar-works-tags-invalid-name = 请输入有效的标签名称，不含控制�
 similar-works-pref-tags-heading = 标签名称
 similar-works-pref-tag-style =
     .value = 名称格式
-similar-works-pref-tag-space =
-    .label = 空格（Deep Learning）
-similar-works-pref-tag-kebab =
-    .label = 连字符（deep-learning）
-similar-works-pref-tag-snake =
-    .label = 下划线（deep_learning）
-similar-works-pref-tag-camel =
-    .label = 驼峰（deepLearning）
 similar-works-pref-tag-hashtag =
     .label = 在开头加 #
 similar-works-pref-tag-help = 用于新标签推荐和格式转换预览。
@@ -107,7 +99,7 @@ similar-works-tags-protected = 所选名称已被排除。请刷新列表，或�
 similar-works-tags-select-all = 全选
 similar-works-tags-selection-count = 已选 { $selected } 个，共 { $total } 个标签
 similar-works-tags-action = 操作
-similar-works-tags-format = 重命名 / 格式化
+similar-works-tags-format = 重命名
 similar-works-tags-merge-action = 合并
 similar-works-tags-preparing = 正在准备预览…
 similar-works-tags-format-preview = 修改 { $count } 个名称，涉及 { $items } 个条目，合并 { $merges } 个标签
@@ -130,17 +122,12 @@ similar-works-tags-deleted = 已删除 { $count } 个标签。
 
 similar-works-tags-renamed = 已改名为“{ $name }”。
 
-similar-works-pref-tag-case =
-    .value = 空格格式大小写
 
-similar-works-pref-case-keep =
-    .label = 保留原样
 
-similar-works-pref-case-lower =
-    .label = 小写
 
-similar-works-pref-case-title =
-    .label = 首字母大写
 
-similar-works-pref-tag-hyphens =
-    .label = 空格格式保留词内连字符
+
+similar-works-pref-tag-sentence =
+    .label = 句首大写
+similar-works-pref-tag-title =
+    .label = 每词首字母大写

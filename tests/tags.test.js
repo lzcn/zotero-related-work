@@ -62,6 +62,13 @@ function fixture() {
       fs.readFileSync(path.join(__dirname, "../src/" + file), "utf8"),
       context,
     );
+  const catalog = JSON.parse(
+    fs.readFileSync(path.join(__dirname, "../data/tag-terms.json"), "utf8"),
+  );
+  context.SWTags._terms = new Map(Object.entries(catalog.terms));
+  context.SWTags._termLength = Math.max(
+    ...Object.keys(catalog.terms).map((key) => key.split(" ").length),
+  );
   return { api: context.SWTags, context, item, tags, writes };
 }
 
@@ -108,6 +115,34 @@ test("duplicate grouping keeps punctuation that distinguishes C++, C# and C", ()
       ["ＡＩ", "AI"],
     ],
   );
+});
+
+test("possible duplicates include plural, reordered, dictionary and near-spelling candidates without merging tags", () => {
+  const { api, writes } = fixture();
+  const groups = api.duplicateGroups([
+    "Graph neural network",
+    "Neural networks graph",
+    "graphneuralnetwork",
+    "Representation learning",
+    "Representaton learning",
+    "GPT-2",
+    "GPT-3",
+    "C++",
+    "C#",
+    "Graph classification",
+    "Image retrieval",
+    "bert-generation",
+    "Bert Generation",
+  ]);
+  assert.deepEqual(
+    Array.from(groups, (group) => Array.from(group)),
+    [
+      ["Graph neural network", "Neural networks graph", "graphneuralnetwork"],
+      ["Representation learning", "Representaton learning"],
+      ["bert-generation", "Bert Generation"],
+    ],
+  );
+  assert.deepEqual(writes, []);
 });
 
 test("adding tags uses current native tags and refuses obsolete names or selection", async () => {
@@ -265,25 +300,29 @@ test("normalization supports one native rename to a new name while preserving co
   assert.deepEqual(writes[0], [1, "Other", "Standard Name"]);
 });
 
-test("tag naming splits separators, camel case and acronym boundaries without stemming or destroying language symbols", () => {
+test("fixed-space naming preserves scientific and unknown mixed-case names", () => {
   const { api } = fixture();
-  const format = (name, style, hashtag = false) =>
+  const format = (name, style = "sentence", hashtag = false) =>
     api.formatName(name, { style, hashtag });
-  assert.equal(format("#DeepLearning", "space"), "Deep Learning");
-  assert.equal(format("Deep_Learning", "kebab", true), "#deep-learning");
-  assert.equal(format("deep-learning", "snake"), "deep_learning");
-  assert.equal(format("Deep Learning", "camel"), "deepLearning");
-  assert.equal(format("JSONParser", "space"), "JSON Parser");
-  assert.equal(format("3DVision", "space"), "3D Vision");
-  assert.equal(format("Llama2Vision", "space"), "Llama2 Vision");
-  assert.equal(format("OpenAI", "camel", true), "#openAI");
-  assert.equal(format("C++", "kebab", true), "#C++");
-  assert.equal(format("C#", "snake"), "C#");
-  assert.equal(format(".NET", "camel"), ".NET");
-  assert.equal(format("deeplearning", "space"), "deeplearning");
-  assert.equal(format("神经网络", "snake", true), "#神经网络");
-  assert.equal(format("##DeepLearning", "kebab", true), "#deep-learning");
-  assert.equal(format("deep—learning", "snake"), "deep_learning");
+  assert.equal(
+    format("deep_learning GAN co-attention"),
+    "Deep learning GAN co-attention",
+  );
+  assert.equal(
+    format("deep learning GAN co-attention", "title"),
+    "Deep Learning GAN Co-attention",
+  );
+  assert.equal(format("gan yolo openai pytorch"), "GAN YOLO OpenAI PyTorch");
+  assert.equal(
+    format("MyBrand X42 C++ C# .NET", "sentence", true),
+    "#MyBrand X42 C++ C# .NET",
+  );
+  assert.equal(format("DeepLearning"), "DeepLearning");
+  assert.equal(format("self-supervised learning"), "Self-supervised learning");
+  assert.equal(format("zero-shot learning"), "Zero-shot learning");
+  assert.equal(format("zero-shot learning", "title"), "Zero-shot Learning");
+  assert.equal(format("deep-learning"), "Deep-learning");
+  assert.equal(format("神经网络", "sentence", true), "#神经网络");
   const group = api.duplicateGroups([
     "#DeepLearning",
     "deep_learning",
@@ -301,7 +340,7 @@ test("tag naming splits separators, camel case and acronym boundaries without st
 test("configured naming applies to new suggestions while preserving existing native tag names", async () => {
   const { api, context, item } = fixture();
   context.SWPref = (key, fallback) =>
-    ({ tagNameStyle: "kebab", tagHashtag: true })[key] ?? fallback;
+    ({ tagNameStyle: "sentence", tagHashtag: true })[key] ?? fallback;
   item.getField = (field) =>
     field === "title"
       ? "Graph Neural Networks for molecule prediction"
@@ -314,13 +353,13 @@ test("configured naming applies to new suggestions while preserving existing nat
   ];
   const tags = await api.suggest(item, rows);
   assert.ok(
-    tags.some((tag) => tag.isNew && tag.name === "#graph-neural-networks"),
+    tags.some((tag) => tag.isNew && tag.name === "#Graph neural networks"),
   );
   assert.ok(tags.some((tag) => !tag.isNew && tag.name === "Deep Learning"));
   item.names = ["#MoleculePrediction"];
   assert.equal(
     (await api.suggest(item, rows)).some(
-      (tag) => tag.isNew && tag.name === "#molecule-prediction",
+      (tag) => tag.isNew && tag.name === "#Molecule prediction",
     ),
     false,
   );
@@ -383,19 +422,21 @@ test("manual exclusions remain protected with color exclusion off, and are rerea
 test("bulk formatting keeps unrelated tags separate, previews collisions and skips unchanged names", async () => {
   const { api, context, tags, writes } = fixture();
   context.SWPref = (key, fallback) =>
-    ({ tagNameStyle: "kebab", tagHashtag: true })[key] ?? fallback;
+    ({ tagNameStyle: "sentence", tagHashtag: true })[key] ?? fallback;
+  tags.set("deep_learning", tags.get("deep-learning"));
+  tags.delete("deep-learning");
   const plan = await api.planFormat(1, [
     "Deep Learning",
-    "deep-learning",
+    "deep_learning",
     "Other",
   ]);
   assert.equal(plan.changes.length, 3);
   assert.equal(plan.collisions, 1);
   assert.equal(plan.itemCount, 4);
   assert.equal(await api.applyFormat(1, plan), 3);
-  assert.deepEqual(tags.get("#deep-learning"), [1, 2, 3]);
-  assert.deepEqual(tags.get("#other"), [4]);
-  const unchanged = await api.planFormat(1, ["#other"]);
+  assert.deepEqual(tags.get("#Deep learning"), [1, 2, 3]);
+  assert.deepEqual(tags.get("#Other"), [4]);
+  const unchanged = await api.planFormat(1, ["#Other"]);
   assert.equal(unchanged.changes.length, 0);
   assert.equal(unchanged.itemCount, 0);
   assert.equal(
@@ -406,17 +447,17 @@ test("bulk formatting keeps unrelated tags separate, previews collisions and ski
 
 test("bulk formatting refuses protected destinations or a changed preview, and stops after the current native write", async () => {
   const { api, context, tags } = fixture();
-  let style = "kebab";
+  let style = "sentence";
   context.SWPref = (key, fallback) =>
-    ({ tagNameStyle: style })[key] ?? fallback;
+    ({ tagNameStyle: style, tagHashtag: true })[key] ?? fallback;
   const plan = await api.planFormat(1, ["Other"]);
-  style = "space";
+  style = "title";
   await assert.rejects(api.applyFormat(1, plan), /changed/);
-  style = "kebab";
-  tags.set("other", [9]);
+  style = "sentence";
+  tags.set("#Other", [9]);
   await assert.rejects(api.applyFormat(1, plan), /changed/);
   context.Zotero.Tags.getColors = () =>
-    new Map([["other", { color: "#123456" }]]);
+    new Map([["#Other", { color: "#123456" }]]);
   await assert.rejects(api.planFormat(1, ["Other"]), /protected/);
   context.Zotero.Tags.getColors = () => new Map();
   let active = true;
@@ -430,41 +471,27 @@ test("bulk formatting refuses protected destinations or a changed preview, and s
     api.applyFormat(1, current, () => active),
     /cancelled/,
   );
-  assert.ok(tags.has("deep-learning"));
+  assert.ok(tags.has("#Deep learning"));
   assert.ok(tags.has("Other"));
   await api.finishWrites();
 });
 
-test("space naming controls case without destroying acronyms, symbols or preserved compounds", () => {
+test("both case styles remain idempotent across dictionary aliases and protected spellings", () => {
   const { api } = fixture();
-  const format = (name, spaceCase, preserveHyphens = true) =>
-    api.formatName(name, {
-      style: "space",
-      spaceCase,
-      preserveHyphens,
-      hashtag: false,
-    });
-  assert.equal(
-    format("Self-Supervised_Learning NLP C++", "lower"),
-    "self-supervised learning NLP C++",
-  );
-  assert.equal(
-    format("self-supervised learning NLP", "title"),
-    "Self-supervised Learning NLP",
-  );
-  assert.equal(
-    format("Self-Supervised_Learning", "keep"),
-    "Self-Supervised Learning",
-  );
-  assert.equal(
-    format("self-supervised_learning", "lower", false),
-    "self supervised learning",
-  );
-  assert.equal(format("deep-learning", "lower"), "deep-learning");
-  for (const style of ["lower", "title", "keep"]) {
-    const once = format("self-supervised NLP learning", style);
-    assert.equal(format(once, style), once);
-  }
+  for (const style of ["sentence", "title"])
+    for (const name of [
+      "gan yolo co-attention",
+      "deep_learning NLP",
+      "MyBrand self-supervised",
+      ...api._terms.keys(),
+    ]) {
+      const result = api.formatName(name, { style, hashtag: true });
+      assert.equal(
+        api.formatName(result, { style, hashtag: true }),
+        result,
+        name,
+      );
+    }
 });
 
 test("bulk removal uses the native host operation, preserves protected tags and stops between writes", async () => {

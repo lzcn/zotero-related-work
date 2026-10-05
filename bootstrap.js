@@ -86,6 +86,10 @@ async function start({ id, version, rootURI }, token) {
       Services.io.newURI(rootURI + "manifest.json"),
       [["content", "similar-works", rootURI + "content/"]],
     );
+    await SWScope.SWTags.loadTerms(rootURI);
+    const namingStyle = Zotero.Prefs.get("similar-works.tagNameStyle");
+    if (!["sentence", "title"].includes(namingStyle))
+      Zotero.Prefs.set("similar-works.tagNameStyle", "sentence");
     await migrateDataDirectory();
     if (token !== SWGeneration) return;
     await SWScope.SWIndexer.start();

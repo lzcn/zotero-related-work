@@ -37,6 +37,7 @@ function fixture({
   const context = vm.createContext({
     Zotero: {
       DataDirectory: { dir: "/data" },
+      Prefs: { get: () => "sentence", set: () => {} },
       initializationPromise: deferZotero ? gate : Promise.resolve(),
       getMainWindows: () => ["first", "second"],
       logError: (error) => state.errors.push(error),
@@ -58,6 +59,11 @@ function fixture({
       scriptloader: {
         loadSubScript(_uri, scope) {
           state.loads.push(_uri);
+          scope.SWTags = {
+            loadTerms: async () => {},
+            stop: () => {},
+            finishWrites: async () => {},
+          };
           scope.SWIndexer = {
             corpus,
             start: async () => state.starts++,

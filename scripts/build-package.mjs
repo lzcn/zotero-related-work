@@ -68,7 +68,7 @@ for (const name of [
   "THIRD-PARTY-NOTICES",
 ])
   await add(name);
-for (const name of ["src", "icons", "locale", "content"])
+for (const name of ["src", "icons", "locale", "content", "data"])
   await addDirectory(name);
 // Validate the same script paths that Zotero's bootstrap loads.
 const bootstrap = files["bootstrap.js"].toString("utf8");
