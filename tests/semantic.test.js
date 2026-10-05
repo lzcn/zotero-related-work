@@ -59,6 +59,34 @@ test("dense vectors preserve signed values, normalize and reject corruption", ()
   values[0] = NaN;
   assert.throws(() => semantic.pool([values], [1]), /Invalid/);
 });
+test("native SQLite byte arrays and unaligned views retain cached embeddings", async () => {
+  const { semantic } = fixture();
+  const vector = new Float32Array(384);
+  vector[0] = -0.6;
+  vector[1] = 0.8;
+  const bytes = semantic.encode(vector);
+  const nativeBytes = Array.from(bytes);
+  assert.deepEqual(semantic.decode(nativeBytes), semantic.decode(bytes));
+  const unaligned = new Uint8Array(bytes.length + 1);
+  unaligned.set(bytes, 1);
+  assert.deepEqual(
+    semantic.decode(unaligned.subarray(1)),
+    semantic.decode(bytes),
+  );
+  semantic.corpus.docs.set("1/A", { hash: "unchanged" });
+  semantic.corpus._db.execute = async () => [
+    {
+      getResultByName: (name) =>
+        ({ key: "1/A", sourceHash: "unchanged", vector: nativeBytes })[name],
+    },
+  ];
+  await semantic.start(semantic.corpus);
+  assert.equal(semantic.status.indexedItems, 1);
+  semantic.enable();
+  assert.equal(semantic._queue.length, 0);
+  assert.equal(semantic._running, null);
+  assert.equal((await semantic.search("1/A", 20)).length, 0);
+});
 test("semantic Top-K uses valid same-library vectors and respects cancellation", async () => {
   const { semantic, put } = fixture();
   put("1/Q", "q", [1, 0]);
@@ -142,6 +170,33 @@ test("input chunking stays bounded and removes reference sections", () => {
   assert.ok(chunks.every((s) => s.length <= 1800 && !s.includes("Smith")));
 });
 
+test("semantic Top-K cache updates incrementally and invalidates on removal", () => {
+  const { semantic, put } = fixture();
+  put("1/Q", "q", [1, 0]);
+  put("1/A", "a", [1, 0]);
+  semantic.saveRecommendations("1/Q", true, [
+    { key: "1/A", score: 1, weak: false },
+  ]);
+  const cached = semantic.getRecommendations("1/Q", true);
+  assert.ok(cached);
+  assert.ok(semantic.recommendationsFresh(cached, "1/Q"));
+  // A newly built vector is inserted without rescanning the whole corpus.
+  put("1/B", "b", [0.8, 0.6]);
+  semantic._applyVectorChange("1/B");
+  assert.deepEqual(
+    cached.matches.map((m) => m.key),
+    ["1/A", "1/B"],
+  );
+  // Deleting a present match frees a slot that cannot be refilled in place.
+  semantic.forget("1/A");
+  assert.ok(!cached.matches.some((m) => m.key === "1/A"));
+  assert.equal(cached.dirty, true);
+  assert.ok(!semantic.recommendationsFresh(cached, "1/Q"));
+  // A changed query vector drops its own cached ranking.
+  semantic._applyVectorChange("1/Q");
+  assert.equal(semantic.getRecommendations("1/Q", true), null);
+});
+
 test("model cache deduplicates loads and verifies downloaded bytes", async () => {
   const { semantic, context } = fixture();
   const crypto = require("node:crypto");
@@ -189,4 +244,94 @@ test("rapid method switches do not let an old worker failure poison the new queu
   await running;
   assert.equal(semantic.status.state, "waiting");
   assert.equal(semantic.status.error, null);
+});
+
+test("foreground selection interrupts background delay and runs before queued work", async () => {
+  const { context, semantic } = fixture();
+  semantic._enabled = true;
+  semantic.corpus.docs.set("1/B", { hash: "background" });
+  semantic.corpus.docs.set("1/Q", { hash: "selected" });
+  let resume;
+  let waits = 0;
+  context.swYield = () => {
+    waits++;
+    return new Promise((resolve) => {
+      resume = resolve;
+    });
+  };
+  const built = [];
+  semantic._build = async (key) => {
+    built.push(key);
+    if (key === "1/B") semantic.pause();
+  };
+  semantic.enqueue("1/B");
+  assert.equal(waits, 1);
+  semantic.enqueue("1/Q", true);
+  resume();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(built, ["1/Q"]);
+  assert.equal(waits, 2);
+  semantic.enqueue("1/B", true);
+  resume();
+  await semantic._running;
+  assert.deepEqual(built, ["1/Q", "1/B"]);
+  assert.equal(waits, 2);
+  assert.equal(semantic._priority.size, 0);
+});
+
+test("a foreground request skips startup delay", async () => {
+  const { context, semantic } = fixture();
+  semantic._enabled = true;
+  semantic.corpus.docs.set("1/Q", { hash: "selected" });
+  let waits = 0;
+  context.swYield = async () => {
+    waits++;
+  };
+  semantic._build = async () => semantic.pause();
+  semantic.enqueue("1/Q", true);
+  await semantic._running;
+  assert.equal(waits, 0);
+});
+
+test("tag-name inference reuses the paper vector and cached tags, serializes with document encoding, and cancels stale results", async () => {
+  const { semantic, context, put } = fixture();
+  context.SWIndexer.docKey = () => "1/A";
+  put("1/A", "one", [1, 0]);
+  semantic._worker = {};
+  semantic._enabled = true;
+  let running = 0,
+    peak = 0,
+    requests = 0;
+  semantic._request = async (_type, { texts }) => {
+    running++;
+    peak = Math.max(peak, running);
+    requests++;
+    await new Promise((resolve) => setImmediate(resolve));
+    running--;
+    return {
+      vectors: texts.map((text) => {
+        const v = Array(384).fill(0);
+        v[text === "Relevant" ? 0 : 1] = 1;
+        return v;
+      }),
+    };
+  };
+  const [scores] = await Promise.all([
+    semantic.tagSimilarity({}, ["Relevant", "Other"]),
+    semantic._encode(["Document"]),
+  ]);
+  assert.deepEqual(Array.from(scores), [1, 0]);
+  assert.equal(peak, 1);
+  assert.equal(requests, 2);
+  await semantic.tagSimilarity({}, ["Relevant", "Other"]);
+  assert.equal(requests, 2, "tag names should not be encoded again");
+  assert.equal(
+    await semantic.tagSimilarity({}, ["Missing"], () => false),
+    null,
+  );
+  semantic._request = async (_type, { texts }) => {
+    semantic.corpus.docs.get("1/A").hash = "changed";
+    return { vectors: texts.map(() => Array(384).fill(0)) };
+  };
+  assert.equal(await semantic.tagSimilarity({}, ["New"]), null);
 });

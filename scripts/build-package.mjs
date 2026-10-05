@@ -6,6 +6,8 @@ import assert from "node:assert/strict";
 import { Script } from "node:vm";
 import { validatePackage } from "./validate-package.mjs";
 import { build } from "esbuild";
+import { createHash } from "node:crypto";
+import { TextEncoder } from "node:util";
 import { requiredFiles } from "./package-files.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -116,6 +118,19 @@ files["runtime/onnxruntime-LICENSE"] = await readFile(
 
 files["runtime/onnxruntime-NOTICES"] = await readFile(
   join(root, "licenses/onnxruntime-notices.txt"),
+);
+
+// Identify the packaged inputs without adding timestamps or personal paths.
+const buildHash = createHash("sha256");
+for (const name of Object.keys(files).sort()) {
+  buildHash.update(name + "\0");
+  buildHash.update(files[name]);
+}
+files["content/build-info.json"] = new TextEncoder().encode(
+  JSON.stringify({
+    version: pkg.version,
+    id: buildHash.digest("hex").slice(0, 12),
+  }),
 );
 
 const output = join(root, "dist", `${pkg.name}.xpi`);

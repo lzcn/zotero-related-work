@@ -1,0 +1,77 @@
+<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <head>
+    <meta charset="utf-8" />
+    <title data-l10n-id="similar-works-tags-organize">Tag Manager</title>
+    <link rel="localization" href="similar-works.ftl" />
+    <link rel="stylesheet" href="chrome://global/skin/" />
+    <link rel="stylesheet" href="chrome://zotero/skin/zotero.css" />
+    <link rel="stylesheet" href="tags.css" />
+  </head>
+  <body>
+    <header>
+      <input
+        id="search"
+        type="search"
+        data-l10n-id="similar-works-tags-search"
+      />
+      <label
+        ><input id="duplicates" type="checkbox" /><span
+          data-l10n-id="similar-works-tags-duplicates"
+        ></span
+      ></label>
+      <button id="refresh" data-l10n-id="similar-works-tags-refresh"></button>
+    </header>
+    <div class="selection-bar">
+      <label
+        ><input id="select-all" type="checkbox" /><span
+          data-l10n-id="similar-works-tags-select-all"
+        ></span
+      ></label>
+      <span id="selection-count" role="status"></span>
+    </div>
+    <main id="tags" tabindex="0"></main>
+    <footer>
+      <label for="mode" data-l10n-id="similar-works-tags-action"></label>
+      <select id="mode">
+        <option
+          value="merge"
+          data-l10n-id="similar-works-tags-merge-action"
+        ></option>
+        <option
+          value="format"
+          data-l10n-id="similar-works-tags-format"
+        ></option>
+        <option
+          value="delete"
+          data-l10n-id="similar-works-tags-delete-action"
+        ></option>
+      </select>
+      <label
+        id="target-label"
+        hidden="hidden"
+        for="target"
+        data-l10n-id="similar-works-tags-keep"
+      ></label>
+      <input
+        id="target"
+        hidden="hidden"
+        type="text"
+        maxlength="255"
+        disabled="disabled"
+        list="selected-names"
+      />
+      <datalist id="selected-names"></datalist>
+      <p id="preview" role="status"></p>
+      <div class="actions">
+        <button id="close" data-l10n-id="similar-works-tags-close"></button>
+        <button
+          id="merge"
+          disabled="disabled"
+          data-l10n-id="similar-works-tags-merge-button"
+        ></button>
+      </div>
+    </footer>
+    <script src="tags.js"></script>
+  </body>
+</html>

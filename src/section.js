@@ -1,5 +1,6 @@
 var SW_CSS = `
-.sw-list { display: flex; flex-direction: column; gap: 3px; padding: 2px 0; }
+/* Keep result text out of the native sidebar's intrinsic width calculation. */
+.sw-list { contain: inline-size; min-width: 0; display: flex; flex-direction: column; gap: 3px; padding: 2px 0; }
 .sw-computation-progress { display: block; width: calc(100% - 12px); height: 4px; margin: 3px 6px 7px; accent-color: var(--accent-blue, #3874d8); }
 .sw-computation-progress[hidden] { display: none; }
 .sw-status { padding: 4px 6px; color: var(--text-secondary, gray); font-size: 12px; }
@@ -11,14 +12,14 @@ var SW_CSS = `
 /* Zotero's native button rule caps max-height at 25px. Recommendation rows
    must grow with their title and metadata, including in XUL main windows. */
 .sw-list > button.sw-row { appearance: none; box-sizing: border-box; height: auto;
-	max-height: none; min-height: 0; margin: 0; flex-shrink: 0; white-space: normal; }
+	max-height: none; min-height: 0; min-width: 0; margin: 0; flex-shrink: 0; white-space: normal; }
 .sw-row:focus-visible { outline: 2px solid var(--accent-blue, #3874d8); }
 .sw-rank { min-width: 14px; padding-top: 3px; font-size: 11px; color: var(--text-secondary, gray); }
 .sw-row:hover { background: var(--fill-quinary, rgba(127, 127, 127, 0.12)); }
 .sw-row:active { background: var(--fill-quaternary, rgba(127, 127, 127, 0.2)); }
 .sw-main { flex: 1 1 auto; min-width: 0; }
 .sw-title {
-	font-size: 13px; line-height: 1.35; color: var(--text-primary, currentColor);
+	overflow-wrap: anywhere; font-size: 13px; line-height: 1.35; color: var(--text-primary, currentColor);
 	display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
 }
 .sw-meta { font-size: 11px; color: var(--text-secondary, gray); line-height: 1.4; margin-top: 3px;
@@ -30,6 +31,17 @@ var SW_CSS = `
 .sw-track { width: 74px; height: 4px; border-radius: 2px;
 	background: var(--fill-secondary, rgba(127, 127, 127, 0.25)); overflow: hidden; }
 .sw-bar { height: 100%; border-radius: 2px; background: var(--accent-blue, #3874d8); }
+.sw-tags { contain: inline-size; min-width: 0; margin: 4px 0 10px; padding: 8px; border-bottom: 1px solid var(--fill-secondary, rgba(128,128,128,.2)); }
+.sw-tag-existing { color: light-dark(#1762ad, #80b8ee); }
+.sw-tag-new { color: light-dark(#7540a4, #cba2f0); }
+.sw-tags[hidden] { display: none; }
+.sw-tag-heading { display: flex; gap: 8px; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.sw-tag-heading strong { font-size: 12px; }
+.sw-tag-organize { font: inherit; font-size: 11px; background: transparent; border: 0; color: var(--accent-blue, #3874d8); padding: 2px; cursor: pointer; }
+.sw-tag-option { display: flex; gap: 6px; align-items: flex-start; padding: 4px 0; font-size: 12px; }
+.sw-tag-name { min-width: 0; flex: 1; overflow-wrap: anywhere; }
+.sw-tag-support { flex: none; font-size: 11px; color: var(--text-secondary, gray); }
+.sw-tag-apply { margin: 6px 0 0; font-size: 12px; }
 .sw-flag { font-size: 10px; color: var(--text-tertiary, gray); border: 1px solid
 	var(--fill-tertiary, rgba(127,127,127,.35)); border-radius: 3px; padding: 0 3px; }
 `;
@@ -40,6 +52,9 @@ var SWSection = {
   _active: [],
   _stopped: false,
   _windows: new Set(),
+  _tagMenus: new Map(),
+  _tagObserver: null,
+  _tagTimer: null,
   _prefObserver: null,
   _preferencePane: null,
 
@@ -93,6 +108,29 @@ var SWSection = {
       ],
     };
     this._registered = Zotero.ItemPaneManager.registerSection(opts);
+    this._tagObserver = Zotero.Notifier?.registerObserver(
+      {
+        notify: () => {
+          if (this._stopped || this._tagTimer) return;
+          this._tagTimer = setTimeout(() => {
+            this._tagTimer = null;
+            if (this._stopped) return;
+            for (const props of this._active) {
+              const { body } = props;
+              if (body.isConnected && body._swTagRows)
+                void this.presentTags(
+                  props,
+                  body._swTagRows,
+                  body._swSelectionKey,
+                  body._swToken,
+                ).catch((error) => Zotero.logError(error));
+            }
+          }, 100);
+        },
+      },
+      ["item-tag", "tag"],
+      "similar-works-tags",
+    );
     this._prefObserver = Zotero.Prefs.registerObserver?.(
       "similar-works.recommendationMethod",
       () => {
@@ -131,7 +169,10 @@ var SWSection = {
     progress.max = 100;
     progress.hidden = true;
     progress.setAttribute("data-l10n-id", "similar-works-progress");
-    body.replaceChildren(status, progress, list);
+    var tags = doc.createElementNS("http://www.w3.org/1999/xhtml", "div");
+    tags.className = "sw-tags";
+    tags.hidden = true;
+    body.replaceChildren(status, progress, tags, list);
   },
 
   async fmt(doc, id, args, fallback) {
@@ -158,6 +199,13 @@ var SWSection = {
       status.hidden = !text;
     }
     if (!clearRows) return;
+    body._swTagRows = null;
+    body._swTagSignature = null;
+    const tags = body.querySelector(".sw-tags");
+    if (tags) {
+      tags.replaceChildren();
+      tags.hidden = true;
+    }
     body._swResultsSignature = null;
     var rows = body.querySelectorAll(".sw-row");
     for (let r of rows) {
@@ -457,10 +505,23 @@ var SWSection = {
       (compute && SWSemantic.status.state === "error")
     )
       SWSemantic.enable();
+    const includeWeak = SWPref("allowMetadataOnlyRecommendations", true);
+    const cached = compute
+      ? null
+      : SWSemantic.getRecommendations(key, includeWeak);
+    if (cached && !cached.dirty) {
+      await this._presentMatches(
+        props,
+        cached.matches.filter((m) => m.score >= 0.35),
+        key,
+        token,
+      );
+      if (body._swToken !== token || this._stopped) return;
+      if (SWSemantic.recommendationsFresh(cached, key)) return;
+    }
     await SWIndexer.ensureForDisplay(target);
     if (body._swToken !== token || this._stopped) return;
     SWSemantic.enqueue(key, true);
-    const includeWeak = SWPref("allowMetadataOnlyRecommendations", true);
     const matches = await SWSemantic.search(
       key,
       50,
@@ -484,6 +545,8 @@ var SWSection = {
       this.setStatus(body, fallback);
       return;
     }
+    await SWSemantic.saveRecommendations(key, includeWeak, matches);
+    if (body._swToken !== token || this._stopped) return;
     // Dense and text scores have different distributions; never reuse the
     // text threshold or cached scores for this method.
     await this._presentMatches(
@@ -551,6 +614,10 @@ var SWSection = {
         r.weak,
       ]),
     );
+    void this.presentTags(props, rows, docKey, token).catch((error) =>
+      Zotero.logError(error),
+    );
+    if (this._stopped || body._swToken !== token) return;
     if (body._swResultsSignature === signature) return;
     var renderedRows = [];
     var rank = 0;
@@ -624,6 +691,173 @@ var SWSection = {
     }
   },
 
+  async presentTags(props, rows, docKey, token) {
+    const { body } = props;
+    const doc = body.ownerDocument;
+    const target = await SWIndexer.resolveDocItem(props.item);
+    if (!target || this._stopped || body._swToken !== token) return;
+    body._swTagRows = rows;
+    const tagRevision = (body._swTagRevision || 0) + 1;
+    body._swTagRevision = tagRevision;
+    const activeSuggestions = () =>
+      !this._stopped &&
+      body._swToken === token &&
+      body._swTagRevision === tagRevision;
+    const suggestions = await SWTags.suggest(target, rows, activeSuggestions);
+    if (!activeSuggestions()) return;
+    const panel = body.querySelector(".sw-tags");
+    if (!panel) return;
+    const tagSignature = JSON.stringify([
+      docKey,
+      target.getTags?.(),
+      suggestions,
+    ]);
+    if (body._swTagSignature === tagSignature && !panel.hidden) return;
+    const selected = new Set(
+      [...panel.querySelectorAll("input")]
+        .filter((input) => input.checked)
+        .map((input) => input.value),
+    );
+    const node = (tag, className) => {
+      const result = doc.createElementNS("http://www.w3.org/1999/xhtml", tag);
+      result.className = className;
+      return result;
+    };
+    const heading = node("div", "sw-tag-heading");
+    const title = node("strong", "");
+    title.textContent = await this.fmt(
+      doc,
+      "similar-works-tags-suggested",
+      null,
+      "Suggested tags",
+    );
+    const organize = node("button", "sw-tag-organize");
+    organize.type = "button";
+    organize.disabled = target.isEditable?.() === false;
+    organize.textContent = await this.fmt(
+      doc,
+      "similar-works-tags-organize",
+      null,
+      "Tag Manager",
+    );
+    organize.addEventListener("click", () => {
+      try {
+        SWTags.open(doc.defaultView, target.libraryID);
+      } catch (error) {
+        Zotero.logError(error);
+      }
+    });
+    heading.appendChild(title);
+    heading.appendChild(organize);
+    const controls = [],
+      content = [heading];
+    const apply = node("button", "sw-tag-apply");
+    apply.type = "button";
+    apply.disabled = true;
+    apply.textContent = await this.fmt(
+      doc,
+      "similar-works-tags-add",
+      null,
+      "Add selected tags",
+    );
+    for (const suggestion of suggestions) {
+      const label = node("label", "sw-tag-option");
+      const check = node("input", "");
+      check.type = "checkbox";
+      check.value = suggestion.name;
+      check.checked = selected.has(suggestion.name);
+      check.disabled = !target.isEditable?.();
+      controls.push(check);
+      const text = node(
+        "span",
+        "sw-tag-name " + (suggestion.isNew ? "sw-tag-new" : "sw-tag-existing"),
+      );
+      text.textContent = suggestion.name;
+      const support = node("span", "sw-tag-support");
+      support.textContent = await this.fmt(
+        doc,
+        suggestion.isNew
+          ? "similar-works-tags-new"
+          : "similar-works-tags-existing",
+        { count: suggestion.count },
+        String(suggestion.count),
+      );
+      check.addEventListener("change", () => {
+        apply.disabled = !controls.some((input) => input.checked);
+      });
+      label.appendChild(check);
+      label.appendChild(text);
+      label.appendChild(support);
+      content.push(label);
+    }
+    apply.disabled = !controls.some(
+      (input) => input.checked && !input.disabled,
+    );
+    const message = node("div", "sw-status");
+    message.setAttribute("role", "status");
+    if (!suggestions.length)
+      message.textContent = await this.fmt(
+        doc,
+        "similar-works-tags-empty",
+        null,
+        "No new tags suggested",
+      );
+    if (suggestions.length) content.push(apply);
+    content.push(message);
+    apply.addEventListener("click", async () => {
+      if (apply.disabled) return;
+      apply.disabled = true;
+      for (const input of controls) input.disabled = true;
+      const active = () =>
+        !this._stopped && body.isConnected && body._swToken === token;
+      try {
+        const count = await SWTags.addSelected(
+          target.id,
+          target.libraryID,
+          suggestions.filter((suggestion) =>
+            controls.some(
+              (input) => input.checked && input.value === suggestion.name,
+            ),
+          ),
+          active,
+        );
+        if (!active()) return;
+        body._swTagSignature = null;
+        await this.presentTags(props, rows, docKey, token);
+        if (active()) {
+          const status = panel.querySelector(".sw-status");
+          status.textContent = await this.fmt(
+            doc,
+            "similar-works-tags-added",
+            { count },
+            "Tags added",
+          );
+        }
+      } catch (error) {
+        if (active()) {
+          message.textContent = await this.fmt(
+            doc,
+            error.message,
+            null,
+            String(error.message || error),
+          );
+          for (const input of controls) input.disabled = false;
+          apply.disabled = false;
+        }
+        Zotero.logError(error);
+      }
+    });
+    if (
+      this._stopped ||
+      body._swToken !== token ||
+      body._swTagRevision !== tagRevision
+    )
+      return;
+    panel.replaceChildren(...content);
+    panel.hidden = false;
+    body._swTagSignature = tagSignature;
+  },
+
   async _resolveRows(matches, k, method = "text") {
     var out = [];
     const configuredMinimum =
@@ -677,6 +911,16 @@ var SWSection = {
     try {
       win.MozXULElement.insertFTLIfNeeded("similar-works.ftl");
     } catch (e) {}
+    win.similarWorksStatus = () => ({
+      ...SWIndexer.getStatus(),
+      indexProgress: { ...SWIndexer.corpus?.progress },
+      vectorTotal: SWIndexer.corpus?.docs.size || 0,
+      model: SWSemantic.model,
+      dimensions: SWSemantic.dimensions,
+      modelVersion: SWSemantic.version,
+      version: SWPlugin.version,
+      rootURI: this._rootURI,
+    });
     var doc = win.document;
     if (!doc.getElementById("similar-works-style")) {
       var style = doc.createElementNS("http://www.w3.org/1999/xhtml", "style");
@@ -684,10 +928,39 @@ var SWSection = {
       style.textContent = SW_CSS;
       doc.documentElement.appendChild(style);
     }
+    const popup = doc.getElementById("menu_ToolsPopup");
+    if (popup && !this._tagMenus.has(win)) {
+      const menu = doc.createXULElement("menuitem");
+      menu.id = "similar-works-organize-tags";
+      menu.classList.add("menuitem-iconic");
+      menu.setAttribute("image", this._rootURI + "icons/tag-manager.svg");
+      menu.setAttribute("data-l10n-id", "similar-works-tags-menu");
+      const showing = () => {
+        const libraryID = win.ZoteroPane.getSelectedLibraryID();
+        const library = Zotero.Libraries.get(libraryID);
+        menu.disabled = !library || !library.editable;
+      };
+      menu.addEventListener("command", () => {
+        try {
+          SWTags.open(win, win.ZoteroPane.getSelectedLibraryID());
+        } catch (error) {
+          Zotero.logError(error);
+        }
+      });
+      popup.addEventListener("popupshowing", showing);
+      popup.appendChild(menu);
+      this._tagMenus.set(win, () => {
+        popup.removeEventListener("popupshowing", showing);
+        menu.remove();
+      });
+    }
     this._windows.add(win);
   },
 
   removeWindow(win) {
+    this._tagMenus.get(win)?.();
+    this._tagMenus.delete(win);
+    delete win.similarWorksStatus;
     try {
       var doc = win.document;
       var style = doc.getElementById("similar-works-style");
@@ -704,6 +977,11 @@ var SWSection = {
 
   shutdown() {
     this._stopped = true;
+    clearTimeout(this._tagTimer);
+    this._tagTimer = null;
+    if (this._tagObserver)
+      Zotero.Notifier.unregisterObserver(this._tagObserver);
+    this._tagObserver = null;
     if (this._prefObserver) Zotero.Prefs.unregisterObserver(this._prefObserver);
     this._prefObserver = null;
     if (this._preferencePane)

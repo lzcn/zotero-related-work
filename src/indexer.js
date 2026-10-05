@@ -69,7 +69,7 @@ var SWIndexer = {
     const status = this.getStatus();
     this._statusWrite = this._statusWrite
       .then(async () => {
-        const dir = PathUtils.join(Zotero.DataDirectory.dir, "similar-works");
+        const dir = PathUtils.join(Zotero.DataDirectory.dir, "related-work");
         await IOUtils.makeDirectory(dir, { ignoreExisting: true });
         await IOUtils.writeUTF8(
           PathUtils.join(dir, "index-status.json"),

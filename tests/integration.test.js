@@ -108,6 +108,7 @@ function harness() {
           .map((i) => i.id);
       },
     },
+    Tags: { getAll: async () => [], getColors: () => new Map() },
     Libraries: { getAll: () => [{ id: 1 }] },
     Fulltext: {
       isCachedMIMEType: (mime) => mime === "application/pdf",
@@ -145,6 +146,7 @@ function harness() {
     "search",
     "corpus",
     "indexer",
+    "tags",
     "section",
   ]) {
     vm.runInContext(
@@ -687,7 +689,16 @@ test("bootstrap loads scripts into a scope with Zotero globals and closes SQLite
       }),
     },
   };
+  env.Components = {
+    classes: {
+      "@mozilla.org/addons/addon-manager-startup;1": {
+        getService: () => ({ registerChrome: () => ({ destruct() {} }) }),
+      },
+    },
+    interfaces: {},
+  };
   env.Services = {
+    io: { newURI: (uri) => uri },
     prefs: {
       prefHasUserValue: (name) =>
         h.prefs.has(name.replace("extensions.zotero.", "")),
@@ -946,7 +957,7 @@ test("background status distinguishes pending scans, queued work, and idle index
   h.SWIndexer._queue = [2];
   h.SWIndexer._reportStatus(true);
   await h.SWIndexer._statusWrite;
-  assert.equal(writes[0][0], "/data/similar-works/index-status.json");
+  assert.equal(writes[0][0], "/data/related-work/index-status.json");
   assert.equal(writes[0][1].state, "indexing");
   assert.equal(writes[0][1].indexedItems, 1);
   assert.equal(writes[0][1].totalItems, 2);
@@ -1000,6 +1011,9 @@ test("method preference keeps Text and Semantic separate without sidebar control
       paused++;
     },
     enqueue() {},
+    getRecommendations: () => null,
+    recommendationsFresh: () => false,
+    saveRecommendations() {},
     search: async () => [{ key: "1/KEY2", score: 0.7, weak: false }],
   };
   // Text and dense scores must never share a threshold.

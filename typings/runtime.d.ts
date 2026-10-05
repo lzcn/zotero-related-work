@@ -22,3 +22,5 @@ declare namespace Zotero {
 declare const APP_SHUTDOWN: number;
 
 declare const SWSemantic: typeof import("../src/semantic").SWSemantic;
+
+declare const SWTags: typeof import("../src/tags").SWTags;

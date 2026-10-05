@@ -1,13 +1,13 @@
 {
-  "name": "zotero-similar-works",
-  "version": "0.1.0",
+  "name": "zotero-related-work",
+  "version": "0.2.0",
   "private": true,
   "description": "Find similar papers in your Zotero library.",
   "license": "AGPL-3.0-or-later",
   "author": "Zhi Lu",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/lzcn/zotero-similar-works.git"
+    "url": "git+https://github.com/lzcn/zotero-related-work.git"
   },
   "engines": {
     "node": "^22.13.0 || >=24.0.0"
@@ -17,7 +17,7 @@
     "lint": "npm run lint:check",
     "lint:check": "prettier --check . && eslint .",
     "lint:fix": "prettier --write . && eslint . --fix",
-    "test": "node tests/unit.test.js && node --test tests/integration.test.js tests/lifecycle.test.js tests/search.test.js tests/semantic.test.js tests/package.test.mjs",
+    "test": "node tests/unit.test.js && node --test tests/integration.test.js tests/lifecycle.test.js tests/search.test.js tests/semantic.test.js tests/package.test.mjs tests/tags.test.js",
     "check": "npm run lint:check && node scripts/build.mjs --check && npm test",
     "release": "npm run check && node scripts/package-release.mjs",
     "typecheck": "tsc --noEmit",
@@ -35,7 +35,7 @@
     "zotero-types": "3.1.9"
   },
   "config": {
-    "addonName": "Similar Works",
+    "addonName": "Related Work",
     "addonID": "similar-works@lzcn",
     "addonRef": "similar-works",
     "prefsPrefix": "extensions.zotero.similar-works"

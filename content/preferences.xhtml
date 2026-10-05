@@ -1,8 +1,11 @@
 <vbox
   xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
   xmlns:html="http://www.w3.org/1999/xhtml"
+  onload="window.SimilarWorksPreferences.start(document)"
+  onshowing="window.SimilarWorksPreferences.start(document)"
 >
   <vbox class="main-section">
+    <description data-l10n-id="similar-works-pref-intro" />
     <hbox align="center">
       <label
         control="similar-works-method"
@@ -46,5 +49,124 @@
       data-l10n-id="similar-works-pref-metadata"
       preference="extensions.zotero.similar-works.allowMetadataOnlyRecommendations"
     />
+  </vbox>
+  <vbox class="main-section">
+    <html:h3 data-l10n-id="similar-works-pref-tags-heading" />
+    <hbox align="center">
+      <label
+        control="similar-works-tag-style"
+        data-l10n-id="similar-works-pref-tag-style"
+      />
+      <menulist
+        native="true"
+        id="similar-works-tag-style"
+        preference="extensions.zotero.similar-works.tagNameStyle"
+      >
+        <menupopup>
+          <menuitem value="space" data-l10n-id="similar-works-pref-tag-space" />
+          <menuitem value="kebab" data-l10n-id="similar-works-pref-tag-kebab" />
+          <menuitem value="snake" data-l10n-id="similar-works-pref-tag-snake" />
+          <menuitem value="camel" data-l10n-id="similar-works-pref-tag-camel" />
+        </menupopup>
+      </menulist>
+    </hbox>
+    <hbox align="center">
+      <label
+        control="similar-works-tag-case"
+        data-l10n-id="similar-works-pref-tag-case"
+      />
+      <menulist
+        native="true"
+        id="similar-works-tag-case"
+        preference="extensions.zotero.similar-works.tagSpaceCase"
+      >
+        <menupopup>
+          <menuitem value="keep" data-l10n-id="similar-works-pref-case-keep" />
+          <menuitem
+            value="lower"
+            data-l10n-id="similar-works-pref-case-lower"
+          />
+          <menuitem
+            value="title"
+            data-l10n-id="similar-works-pref-case-title"
+          />
+        </menupopup>
+      </menulist>
+    </hbox>
+    <checkbox
+      native="true"
+      id="similar-works-tag-hyphens"
+      data-l10n-id="similar-works-pref-tag-hyphens"
+      preference="extensions.zotero.similar-works.tagPreserveHyphens"
+    />
+    <checkbox
+      native="true"
+      id="similar-works-tag-hashtag"
+      data-l10n-id="similar-works-pref-tag-hashtag"
+      preference="extensions.zotero.similar-works.tagHashtag"
+    />
+    <description data-l10n-id="similar-works-pref-tag-help" />
+    <checkbox
+      native="true"
+      id="similar-works-exclude-colored-tags"
+      data-l10n-id="similar-works-pref-exclude-colored-tags"
+      preference="extensions.zotero.similar-works.excludeColoredTags"
+    />
+    <label
+      control="similar-works-excluded-tags"
+      data-l10n-id="similar-works-pref-excluded-tags"
+    />
+    <html:textarea
+      id="similar-works-excluded-tags"
+      rows="3"
+      style="width: 100%; box-sizing: border-box"
+      preference="extensions.zotero.similar-works.excludedTags"
+      aria-describedby="similar-works-excluded-tags-help"
+    />
+    <description
+      id="similar-works-excluded-tags-help"
+      data-l10n-id="similar-works-pref-excluded-tags-help"
+    />
+  </vbox>
+  <vbox class="main-section" id="similar-works-diagnostics">
+    <html:h3 data-l10n-id="similar-works-pref-index-heading" />
+    <html:dl
+      style="
+        display: grid;
+        grid-template-columns: max-content minmax(0, 1fr);
+        gap: 10px 24px;
+        margin: 0;
+      "
+    >
+      <html:dt data-l10n-id="similar-works-pref-build" /><html:dd
+        id="similar-works-build"
+        style="margin: 0"
+      />
+      <html:dt data-l10n-id="similar-works-pref-index" /><html:dd
+        style="margin: 0"
+        ><html:span id="similar-works-index" />
+        <html:progress
+          id="similar-works-index-progress"
+          hidden="hidden"
+          style="display: block; width: 100%; max-width: 360px; margin-top: 6px"
+          data-l10n-id="similar-works-pref-index-progress"
+        />
+      </html:dd>
+      <html:dt data-l10n-id="similar-works-pref-vectors" /><html:dd
+        style="margin: 0"
+        ><html:span id="similar-works-vectors" />
+        <html:progress
+          id="similar-works-vector-progress"
+          hidden="hidden"
+          style="display: block; width: 100%; max-width: 360px; margin-top: 6px"
+          data-l10n-id="similar-works-pref-vector-progress"
+        />
+      </html:dd>
+      <html:dt data-l10n-id="similar-works-pref-model" /><html:dd
+        id="similar-works-model"
+        style="margin: 0; overflow-wrap: anywhere"
+      />
+    </html:dl>
+    <description id="similar-works-diagnostics-error" hidden="true" />
   </vbox>
 </vbox>

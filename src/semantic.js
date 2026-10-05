@@ -18,12 +18,14 @@ var SWSemantic = {
   },
   vectors: new Map(),
   unavailable: new Map(),
+  _recommendations: new Map(),
   _worker: null,
   _pending: new Map(),
   _sequence: 0,
   _generation: 0,
   _queue: [],
   _queued: new Set(),
+  _priority: new Set(),
   _running: null,
   _initializing: null,
   _stopped: false,
@@ -91,6 +93,7 @@ var SWSemantic = {
     this._enabled = false;
     this._queue = [];
     this._queued.clear();
+    this._priority.clear();
     this.status.state = "disabled";
     this._terminate("Semantic indexing paused");
   },
@@ -105,14 +108,17 @@ var SWSemantic = {
     )
       return;
     this.unavailable.delete(key);
-    this.vectors.delete(key);
+    const hadVector = this.vectors.delete(key);
     this.status.indexedItems = this.vectors.size;
+    if (hadVector) this._applyVectorChange(key);
     if (this._queued.has(key)) {
       if (!priority) return;
       this._queue.splice(this._queue.indexOf(key), 1);
     } else this._queued.add(key);
-    if (priority) this._queue.unshift(key);
-    else this._queue.push(key);
+    if (priority) {
+      this._priority.add(key);
+      this._queue.unshift(key);
+    } else this._queue.push(key);
     if (!this._running) this._pump();
   },
 
@@ -142,6 +148,7 @@ var SWSemantic = {
       ) {
         const key = this._queue.shift();
         this._queued.delete(key);
+        this._priority.delete(key);
         await this._build(key, generation);
         await this._rest(3000, generation);
       }
@@ -165,7 +172,8 @@ var SWSemantic = {
       !this._stopped &&
       this._enabled &&
       generation === this._generation &&
-      ms > 0
+      ms > 0 &&
+      !this._priority.size
     ) {
       await swYield(Math.min(ms, 100));
       ms -= 100;
@@ -207,7 +215,7 @@ var SWSemantic = {
       return;
     await this._init();
     this.status.state = "indexing";
-    const result = await this._request("encode", { texts });
+    const result = await this._encode(texts);
     const vector = this.pool(
       result.vectors,
       texts.map((_, i) => (i === 0 ? 3 : 1)),
@@ -228,6 +236,7 @@ var SWSemantic = {
       );
       this.vectors.set(key, { hash: doc.hash, vector });
       this.status.indexedItems = this.vectors.size;
+      this._applyVectorChange(key);
     });
     SWIndexer._reportStatus();
     if (
@@ -237,6 +246,66 @@ var SWSemantic = {
       this._notifiedAt = Date.now();
       SWSection.refreshSemantic();
     }
+  },
+
+  _encoding: Promise.resolve(),
+  _encode(texts, active = () => true) {
+    const generation = this._generation;
+    const pending = this._encoding.then(() => {
+      if (
+        this._stopped ||
+        !this._enabled ||
+        generation !== this._generation ||
+        !active()
+      )
+        throw new Error("Semantic encoding cancelled");
+      return this._request("encode", { texts });
+    });
+    this._encoding = pending.catch(() => null);
+    return pending;
+  },
+
+  _tagVectors: new Map(),
+  _tagRunning: Promise.resolve(),
+
+  tagSimilarity(item, names, active = () => true) {
+    const work = async () => {
+      const query = this.vectors.get(SWIndexer.docKey(item));
+      if (
+        !query ||
+        this.corpus.docs.get(SWIndexer.docKey(item))?.hash !== query.hash ||
+        !this._worker ||
+        this.status.state === "loading" ||
+        !this._enabled ||
+        this._stopped ||
+        !active()
+      )
+        return null;
+      const generation = this._generation;
+      const missing = names.filter((name) => !this._tagVectors.has(name));
+      if (missing.length) {
+        const result = await this._encode(missing, active);
+        if (generation !== this._generation || this._stopped || !active())
+          return null;
+        missing.forEach((name, i) =>
+          this._tagVectors.set(name, result.vectors[i]),
+        );
+        // This is a bounded, rebuildable session cache, never another document index.
+        while (this._tagVectors.size > 512)
+          this._tagVectors.delete(this._tagVectors.keys().next().value);
+      }
+      if (
+        !active() ||
+        this.corpus.docs.get(SWIndexer.docKey(item))?.hash !== query.hash
+      )
+        return null;
+      return names.map((name) =>
+        this.dot(query.vector, this._tagVectors.get(name)),
+      );
+    };
+    const pending = this._tagRunning.then(work);
+    this._tagRunning = pending.catch(() => null);
+    return pending;
   },
 
   chunks(title, abstract, body) {
@@ -299,7 +368,8 @@ var SWSemantic = {
       throw new Error("Invalid stored embedding");
     // Reinterpret without a per-element DataView round trip. Copy so the typed
     // view is always four-byte aligned regardless of the BLOB's byteOffset.
-    const copy = new Uint8Array(bytes.byteLength);
+    // mozStorage returns BLOBs as ordinary byte arrays, not typed views.
+    const copy = new Uint8Array(bytes.length);
     copy.set(bytes);
     return this.normalize(new Float32Array(copy.buffer));
   },
@@ -352,6 +422,96 @@ var SWSemantic = {
         weak,
       }))
       .sort((a, b) => b.score - a.score || a.key.localeCompare(b.key));
+  },
+
+  // Cosine is pairwise and independent of the rest of the corpus, so a cached
+  // Top-K stays valid when vectors are added and only needs a targeted refresh
+  // for the one vector that changed. 50 results are stored to absorb churn.
+  dot(a, b) {
+    let score = 0;
+    for (let i = 0; i < this.dimensions; i++) score += a[i] * b[i];
+    return score;
+  },
+
+  getRecommendations(key, includeWeak) {
+    const cacheKey = JSON.stringify([key, includeWeak]);
+    const cached = this._recommendations.get(cacheKey);
+    if (!cached) return null;
+    this._recommendations.delete(cacheKey);
+    this._recommendations.set(cacheKey, cached);
+    return cached;
+  },
+
+  recommendationsFresh(cached, key) {
+    const vector = this.vectors.get(key);
+    return (
+      !!cached &&
+      !cached.dirty &&
+      !!vector &&
+      cached.queryHash === vector.hash &&
+      this.corpus.docs.get(key)?.hash === vector.hash &&
+      Date.now() - cached.computedAt < 24 * 60 * 60 * 1000
+    );
+  },
+
+  saveRecommendations(key, includeWeak, matches) {
+    const vector = this.vectors.get(key);
+    if (!vector || this.corpus.docs.get(key)?.hash !== vector.hash) return;
+    const cacheKey = JSON.stringify([key, includeWeak]);
+    this._recommendations.set(cacheKey, {
+      queryKey: key,
+      includeWeak,
+      queryHash: vector.hash,
+      matches: matches.slice(0, 50),
+      computedAt: Date.now(),
+      dirty: false,
+    });
+    while (this._recommendations.size > 1000)
+      this._recommendations.delete(this._recommendations.keys().next().value);
+  },
+
+  forget(key) {
+    const removed = this.vectors.delete(key);
+    this.status.indexedItems = this.vectors.size;
+    if (removed) this._applyVectorChange(key);
+  },
+
+  _applyVectorChange(key) {
+    if (!this._recommendations.size) return;
+    const vector = this.vectors.get(key)?.vector || null;
+    const slash = key.indexOf("/"),
+      library = key.slice(0, slash);
+    for (const [cacheKey, cached] of [...this._recommendations]) {
+      if (cached.queryKey === key) {
+        // The query's own vector moved: its ranking cannot be patched.
+        this._recommendations.delete(cacheKey);
+        continue;
+      }
+      const querySlash = cached.queryKey.indexOf("/");
+      if (cached.queryKey.slice(0, querySlash) !== library) continue;
+      const query = this.vectors.get(cached.queryKey);
+      if (!query || cached.queryHash !== query.hash) continue;
+      const index = cached.matches.findIndex((m) => m.key === key);
+      if (index >= 0) cached.matches.splice(index, 1);
+      let refilled = false;
+      if (vector) {
+        const source = this.corpus.docs.get(key);
+        if (cached.includeWeak || !source?.weak) {
+          const score = Math.min(1, this.dot(query.vector, vector));
+          if (score > 0) {
+            cached.matches.push({ key, score, weak: !!source?.weak });
+            refilled = true;
+          }
+        }
+        cached.matches.sort(
+          (a, b) => b.score - a.score || a.key.localeCompare(b.key),
+        );
+        cached.matches = cached.matches.slice(0, 50);
+      }
+      // The entry left the list without a replacement (deleted, or its score
+      // dropped out): the next best neighbor is unknown, so recompute lazily.
+      if (index >= 0 && !refilled) cached.dirty = true;
+    }
   },
 
   async _init() {
@@ -460,7 +620,7 @@ var SWSemantic = {
     }
     const dir = PathUtils.join(
       Zotero.DataDirectory.dir,
-      "similar-works",
+      "related-work",
       "models",
       this.version,
     );

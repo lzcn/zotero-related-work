@@ -1,6 +1,6 @@
-# Similar Works
+# Related Work
 
-<img src="icons/icon-256.png" width="64" height="64" alt="Similar Works" />
+<img src="icons/icon-256.png" width="64" height="64" alt="Related Work" />
 
 [![AI-assisted development: ChatGPT](https://img.shields.io/badge/AI--assisted-ChatGPT-10A37F?style=flat)](https://chatgpt.com/) [![AI-assisted development: DeepSeek](https://img.shields.io/badge/AI--assisted-DeepSeek-4D6BFE?style=flat)](https://www.deepseek.com/)
 
@@ -12,17 +12,27 @@ Find similar papers in the same Zotero library using the existing full-text cach
 
 ## Install
 
-Requires Zotero 10. Download the XPI from the [latest release](https://github.com/lzcn/zotero-similar-works/releases/latest), install it through **Tools → Plugins → Install Plugin From File**, and restart Zotero.
+Requires Zotero 10. Download the XPI from the [latest release](https://github.com/lzcn/zotero-related-work/releases/latest), install it through **Tools → Plugins → Install Plugin From File**, and restart Zotero.
 
 ## Use
 
-Select a paper and expand **Similar Works** in the sidebar. Refresh recalculates recommendations; clicking a result opens the paper. Background indexing and changed items update cached results. Recommendations may be incomplete until indexing finishes.
+Select a paper and expand **Related Work** in the sidebar. Refresh recalculates recommendations; clicking a result opens the paper. Background indexing and changed items update cached results. Recommendations may be incomplete until indexing finishes.
 
-In **Settings → Similar Works**, choose **Text** or **Semantic**. Semantic is currently macOS-only and uses `Xenova/all-MiniLM-L6-v2`, mainly for English papers. Its first use downloads about 23 MB of weights plus tokenizer files from Hugging Face, falling back to hf-mirror.com. It stores one local vector per paper; switching to Text pauses semantic indexing.
+**Suggested tags** combines how well a tag matches the paper with support from similar papers. Existing tags are blue; new tags are purple and marked **New**. New candidates come from repeated topic phrases in the title and abstract. Select tags and click **Add selected tags** to reuse or create them; nothing is added automatically. Tags already present are excluded, and existing tags stay within the same library. Text mode matches topic words; Semantic mode also compares shortlisted tag names with the paper's vector using the same local model. Until that model is ready, tag recommendations use text matching.
+
+Choose **Tools → Tag Manager** to view all tags. Protected tags are hidden. Select individual tags, Shift-click a range, or use **Select all**. Search and **Possible duplicates** filter the list; Select all selects the filtered results. Cmd/Ctrl+A also works while the list is focused.
+
+Choose **Merge** (the default), **Rename / Format**, or **Delete**. Merge combines selected tags into one name. Rename edits a single name or formats each selected tag separately; only matching destinations merge. Delete removes selected tags from items, keeping the items and notes. Review the preview, then click the action button. Changes use Zotero's native tag operations.
+
+In Settings, choose spaces (`deep learning`), hyphens (`deep-learning`), underscores (`deep_learning`) or camel case (`deepLearning`), with an independent leading `#` option. New tags and formatting previews follow these choices. Space-separated names can retain their case, use lowercase (the default), or use title case. Acronyms and `C++`/`C#` are preserved. Hyphenated words such as `self-supervised` stay intact by default in space format; turn this off to split hyphens. Names without clear word boundaries may need manual editing. Colored tags are protected by default. Add other names to **Excluded tags**, one per line; their naming variants are protected too, including as merge destinations.
+
+In **Settings → Related Work**, choose **Text** or **Semantic**. Semantic is currently macOS-only and uses `Xenova/all-MiniLM-L6-v2`, mainly for English papers. Its first use downloads about 23 MB of weights plus tokenizer files from Hugging Face, falling back to hf-mirror.com. It stores one local vector per paper; switching to Text pauses semantic indexing.
+
+Settings also show the current build, text index, semantic vector counts and live progress. The model is downloaded once; document text is processed locally.
 
 ## Data and backup
 
-The rebuildable index is in `similar-works/similarity.sqlite` under the Zotero data directory. Progress is recorded in `similar-works/index-status.json`. The plugin does not modify Zotero's original full-text database.
+The rebuildable index is in `related-work/similarity.sqlite` under the Zotero data directory. Progress is recorded in `related-work/index-status.json`. On first startup after the rename, the entire legacy `similar-works/` cache moves to `related-work/` before opening SQLite, including models and progress. If both directories exist, startup reports the conflict without overwriting either. The plugin does not modify Zotero's original full-text database.
 
 ## Development
 
@@ -35,7 +45,7 @@ Use Node.js 22.13+ (22.x) or 24+. Run `npm ci`, then `npm run check`.
 
 `npm run test:host` verifies packaged startup, localization and cleanup with temporary profile and data directories. Set `ZOTERO_BINARY` to select another host executable.
 
-Build output: `dist/zotero-similar-works.xpi`. Install and verify changes in Zotero. Release preparation does not create a tag or upload files. Shared working rules live in the plugin workspace's root `AGENTS.md`.
+Build output: `dist/zotero-related-work.xpi`. Install and verify changes in Zotero. Release preparation does not create a tag or upload files. Shared working rules live in the plugin workspace's root `AGENTS.md`.
 
 ## License
 

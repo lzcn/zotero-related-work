@@ -36,11 +36,21 @@ function fixture({
   };
   const context = vm.createContext({
     Zotero: {
+      DataDirectory: { dir: "/data" },
       initializationPromise: deferZotero ? gate : Promise.resolve(),
       getMainWindows: () => ["first", "second"],
       logError: (error) => state.errors.push(error),
     },
+    Components: {
+      classes: {
+        "@mozilla.org/addons/addon-manager-startup;1": {
+          getService: () => ({ registerChrome: () => ({ destruct() {} }) }),
+        },
+      },
+      interfaces: {},
+    },
     Services: {
+      io: { newURI: (uri) => uri },
       obs: {
         addObserver: (observer, topic) => state.observers.set(topic, observer),
         removeObserver: (_observer, topic) => state.observers.delete(topic),
@@ -64,8 +74,8 @@ function fixture({
       },
     },
     ChromeUtils: {},
-    IOUtils: {},
-    PathUtils: {},
+    IOUtils: { exists: async () => false },
+    PathUtils: { join: (...parts) => parts.join("/") },
     TextDecoder,
     setTimeout,
     clearTimeout,
@@ -77,8 +87,8 @@ function fixture({
 test("repeated startup and shutdown register and close once", async () => {
   const h = fixture();
   await Promise.all([h.context.startup(h.data), h.context.startup(h.data)]);
-  assert.equal(h.state.loads.length, 7);
-  assert.equal(new Set(h.state.loads).size, 7);
+  assert.equal(h.state.loads.length, 8);
+  assert.equal(new Set(h.state.loads).size, 8);
   assert.ok(h.state.loads.some((uri) => uri.endsWith("search.js")));
   assert.equal(h.state.starts, 1);
   assert.equal(h.state.registered, 1);
@@ -142,4 +152,26 @@ test("confirmed quit cancels work before add-on shutdown is dispatched", async (
   assert.equal(h.state.closed, 1);
   h.context.onMainWindowLoad({ window: "late" });
   assert.equal(h.state.injected.length, 2);
+});
+
+test("cache directory migration moves the complete folder once and refuses to overwrite existing data", async () => {
+  const h = fixture();
+  const files = new Set(["/data/similar-works"]);
+  const moves = [];
+  h.context.IOUtils.exists = async (path) => files.has(path);
+  h.context.IOUtils.move = async (from, to, options) => {
+    assert.equal(options.noOverwrite, true);
+    moves.push([from, to]);
+    files.delete(from);
+    files.add(to);
+  };
+  await h.context.migrateDataDirectory();
+  await h.context.migrateDataDirectory();
+  assert.deepEqual(moves, [["/data/similar-works", "/data/related-work"]]);
+  files.add("/data/similar-works");
+  await assert.rejects(
+    h.context.migrateDataDirectory(),
+    /neither was overwritten/,
+  );
+  assert.equal(moves.length, 1);
 });

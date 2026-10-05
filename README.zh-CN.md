@@ -1,6 +1,6 @@
-# Similar Works
+# Related Work
 
-<img src="icons/icon-256.png" width="64" height="64" alt="Similar Works" />
+<img src="icons/icon-256.png" width="64" height="64" alt="Related Work" />
 
 [![AI-assisted development: ChatGPT](https://img.shields.io/badge/AI--assisted-ChatGPT-10A37F?style=flat)](https://chatgpt.com/) [![AI-assisted development: DeepSeek](https://img.shields.io/badge/AI--assisted-DeepSeek-4D6BFE?style=flat)](https://www.deepseek.com/)
 
@@ -12,17 +12,27 @@
 
 ## 安装
 
-需要 Zotero 10。从[最新发布](https://github.com/lzcn/zotero-similar-works/releases/latest)下载 XPI，通过 **工具 → 插件 → 从文件安装插件** 安装，然后重启 Zotero。
+需要 Zotero 10。从[最新发布](https://github.com/lzcn/zotero-related-work/releases/latest)下载 XPI，通过 **工具 → 插件 → 从文件安装插件** 安装，然后重启 Zotero。
 
 ## 使用
 
-选中文献，在侧栏展开 **Similar Works**。点击刷新重新计算推荐，点击结果打开文献。后台索引和条目变化会更新缓存；索引完成前，推荐可能不完整。
+选择文献并展开侧栏中的 **相关研究**。点击刷新重新计算推荐，点击结果打开文献。后台索引及条目修改会更新缓存；索引完成前，推荐结果可能不完整。
 
-在 **设置 → Similar Works** 中选择 **文本匹配** 或 **语义匹配**。语义匹配目前仅支持 macOS，使用 `Xenova/all-MiniLM-L6-v2`，主要适合英文文献。首次使用从 Hugging Face 下载约 23 MB 权重及分词文件，失败时使用 hf-mirror.com。每篇文献保存一个本地向量；切换到文本匹配会暂停语义索引。
+**建议标签** 同时考虑标签与当前文献的匹配程度，以及相似文献的支持。已有标签显示蓝色，新标签显示紫色并标注 **新建**；新标签候选来自标题和摘要中重复出现的主题词。选择标签并点击 **添加所选标签**，插件不会自动添加。已添加的标签不参与推荐，已有标签限定在当前文献库内。文本模式匹配主题词；语义模式还会使用同一本地模型比较候选标签与文献向量，模型就绪前使用文本匹配。
+
+通过 **工具 → 标签管理** 查看全部标签，受保护的标签不显示。支持逐个选择、按住 Shift 点选连续范围，以及 **全选**。搜索和 **可能重复** 用于筛选，全选作用于筛选结果；列表聚焦时也可使用 Cmd/Ctrl+A。
+
+操作分为 **合并**（默认）、**重命名 / 格式化** 和 **删除**。合并将所选标签统一为一个名称；重命名支持手动修改单个名称或分别转换多个标签，仅在目标重名时合并；删除从条目中移除所选标签，保留文献和笔记。核对预览后点击对应操作按钮，修改使用 Zotero 原生标签接口。
+
+在设置中选择空格（`deep learning`）、连字符（`deep-learning`）、下划线（`deep_learning`）或驼峰（`deepLearning`），并单独选择是否加 `#`。新标签及格式转换预览共用这些选项。空格格式可选择保留原样、小写（默认）或首字母大写，保留缩写及 `C++`、`C#` 等名称。空格格式默认保留 `self-supervised` 这类词内连字符，关闭该选项才会拆分。没有明确词界的名称可能需要手动调整。有颜色的标签默认受保护；其他特殊名称在 **排除标签** 中填写，每行一个，其同类写法也受保护，不能作为合并目标。
+
+在 **设置 → Related Work** 中选择 **文本匹配** 或 **语义匹配**。语义匹配目前仅支持 macOS，使用 `Xenova/all-MiniLM-L6-v2`，主要适合英文文献。首次使用从 Hugging Face 下载约 23 MB 权重及分词文件，失败时使用 hf-mirror.com。每篇文献保存一个本地向量；切换到文本匹配会暂停语义索引。
+
+设置页同时显示当前构建、文本索引、语义向量数量和处理进度。模型只需下载一次，文献内容始终在本机处理。
 
 ## 数据与备份
 
-可重建的索引位于 Zotero 数据目录的 `similar-works/similarity.sqlite`，进度记录在 `similar-works/index-status.json`。插件不修改 Zotero 原始全文数据库。
+可重建的索引位于 Zotero 数据目录的 `related-work/similarity.sqlite`，进度记录在 `related-work/index-status.json`。改名后首次启动时，插件会在打开 SQLite 前将旧 `similar-works/` 目录整体迁移到 `related-work/`，包括模型缓存和进度文件。若新旧目录同时存在，报错且不覆盖任何一边。插件不修改 Zotero 原始全文数据库。
 
 ## 开发
 
@@ -35,7 +45,7 @@
 
 `npm run test:host` 使用临时配置和数据目录验证安装包启动、本地化及资源释放。通过 `ZOTERO_BINARY` 指定其他宿主程序。
 
-构建产物：`dist/zotero-similar-works.xpi`。安装后在 Zotero 中验证改动。本地发布准备不创建 tag 或上传文件。共同开发规范见工作区根目录 `AGENTS.md`。
+构建产物：`dist/zotero-related-work.xpi`。安装后在 Zotero 中验证改动。本地发布准备不创建 tag 或上传文件。共同开发规范见工作区根目录 `AGENTS.md`。
 
 ## 许可证
 

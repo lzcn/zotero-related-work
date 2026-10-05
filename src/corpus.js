@@ -44,7 +44,7 @@ var SWCorpus = class {
   async _openAndLoad() {
     try {
       var dataDir = Zotero.DataDirectory.dir;
-      var dir = PathUtils.join(dataDir, "similar-works");
+      var dir = PathUtils.join(dataDir, "related-work");
       await IOUtils.makeDirectory(dir, { ignoreExisting: true });
       if (this._stopped) return;
       this._dbPath = PathUtils.join(dir, "similarity.sqlite");
@@ -53,7 +53,7 @@ var SWCorpus = class {
       );
       this._shutdownClient = Sqlite.shutdown;
       this._shutdownClient?.addBlocker(
-        "Similar Works: close similarity database",
+        "Related Work: close similarity database",
         this._shutdownBlocker,
       );
       this._db = await Sqlite.openConnection({ path: this._dbPath });
@@ -401,6 +401,9 @@ var SWCorpus = class {
   }
 
   async _removeDoc(key) {
+    // Forget the semantic vector first: item deletions must invalidate the
+    // semantic Top-K cache even if the text corpus never tracked this key.
+    if (typeof SWSemantic !== "undefined") SWSemantic.forget(key);
     const previous = this.docs.get(key);
     if (!previous) return false;
     const counts = await this._readCounts(key),
@@ -433,10 +436,6 @@ var SWCorpus = class {
         this.search.changes = previousChanges;
         throw new Error("[similar-works] delete doc failed", { cause: e });
       }
-    }
-    if (typeof SWSemantic !== "undefined") {
-      SWSemantic.vectors.delete(key);
-      SWSemantic.status.indexedItems = SWSemantic.vectors.size;
     }
     await this._reverseUpdate(key);
     void this._maintainEpoch();
