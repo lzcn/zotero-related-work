@@ -12,6 +12,7 @@
   const mode = document.getElementById("mode");
   const selected = new Set();
   let names = [],
+    counts = new Map(),
     visible = [],
     groups = new Set(),
     revision = 0,
@@ -165,6 +166,11 @@
         input.disabled = busy;
         const text = document.createElement("span");
         text.textContent = name;
+        const count = document.createElement("small");
+        count.className = "tag-count";
+        count.textContent =
+          " (" + (counts.get(name) || 0).toLocaleString() + ")";
+        text.appendChild(count);
         const hint = document.createElement("small");
         const normalized = mode.value === "format" ? api.formatName(name) : "";
         if (normalized && normalized !== name)
@@ -205,9 +211,13 @@
 
   async function load() {
     const token = ++loadRevision;
-    const catalog = await api.catalog(libraryID, true);
+    const [catalog, usage] = await Promise.all([
+      api.catalog(libraryID, true),
+      api.usageCounts(libraryID),
+    ]);
     if (!active() || token !== loadRevision) return;
     names = catalog;
+    counts = usage;
     for (const name of selected)
       if (!names.includes(name)) selected.delete(name);
     groups = new Set(api.duplicateGroups(names).flat());

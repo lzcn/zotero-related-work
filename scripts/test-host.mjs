@@ -181,6 +181,10 @@ startup = async function(data) {
       await tagDialog.document.l10n.ready;
       testTagWindows.push(tagDialog);
       const td = tagDialog.document;
+      for (const name of ["Deep Learning", "deep-learning"]) {
+        const input = [...td.querySelectorAll('#tags input')].find(input => input.value === name);
+        if (input?.closest('label').querySelector('.tag-count')?.textContent.trim() !== "(2)") throw new Error("Tag usage count did not include native note/manual/automatic membership: " + name);
+      }
       if (td.getElementById('duplicates').checked) throw new Error("Tag Manager did not default to all tags");
       td.getElementById('mode').value = "merge";
       td.getElementById('mode').dispatchEvent(new tagDialog.Event("change",{bubbles:true}));
@@ -195,6 +199,7 @@ startup = async function(data) {
       td.getElementById('merge').click();
       await waitFor(() => peers[1].hasTag("Deep Learning") && !peers[1].hasTag("deep-learning"), "apply merge");
       await waitFor(() => !td.getElementById('refresh').disabled, 'merge result');
+      await waitFor(() => td.querySelector('.tag-count')?.textContent.trim() === "(4)", 'refresh merged usage count');
       if (tagDialog.closed || !taggedNote.hasTag("Deep Learning") || taggedNote.getNote() !== noteBeforeMerge || Zotero.Tags.getColor(item.libraryID, "Deep Learning").color !== "#336699") throw new Error("Merge changed note content, target color or closed results");
       Zotero.Prefs.set("extensions.zotero.similar-works.excludeColoredTags",true,true);
       peers[1].addTag("Representation learning");

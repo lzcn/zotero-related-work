@@ -535,6 +535,18 @@ var SWTags = {
       .sort((a, b) => a.localeCompare(b));
   },
 
+  async usageCounts(libraryID) {
+    // Match native tag membership, including notes and attachments. Fetch all
+    // counts together instead of issuing one query for every displayed tag.
+    const rows = await Zotero.DB.queryAsync(
+      "SELECT name AS tag, COUNT(DISTINCT itemID) AS count " +
+        "FROM itemTags JOIN tags USING (tagID) JOIN items USING (itemID) " +
+        "WHERE libraryID = ? GROUP BY tagID",
+      [libraryID],
+    );
+    return new Map(rows.map((row) => [row.tag, row.count]));
+  },
+
   async preview(libraryID, names, active = () => true) {
     this._check(libraryID, active);
     this._assertAllowed(libraryID, names);
