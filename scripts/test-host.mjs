@@ -330,6 +330,13 @@ startup = async function(data) {
       const bulkDialog = tagAPI.open(doc.defaultView,item.libraryID);
       await waitFor(() => bulkDialog.document?.querySelectorAll('#tags input').length > 230, 'display all tags without a cutoff');
       const bd = bulkDialog.document;
+      if (Zotero.isMac) {
+        bulkDialog.dispatchEvent(new bulkDialog.KeyboardEvent("keydown",{key:"w",metaKey:true,isComposing:true,cancelable:true}));
+        bulkDialog.dispatchEvent(new bulkDialog.KeyboardEvent("keydown",{key:"w",ctrlKey:true,cancelable:true}));
+        if (bulkDialog.closed) throw new Error("IME or Control-W closed Tag Manager");
+        bulkDialog.dispatchEvent(new bulkDialog.KeyboardEvent("keydown",{key:"f",metaKey:true,cancelable:true}));
+        if (bd.activeElement !== bd.getElementById("search")) throw new Error("Command-F did not focus tag search");
+      }
       if (bd.getElementById("mode").value !== "merge") throw new Error("Wrong default tag action");
       bd.getElementById("mode").value = "format";
       bd.getElementById("mode").dispatchEvent(new bulkDialog.Event("change",{bubbles:true}));
@@ -371,7 +378,8 @@ startup = async function(data) {
       await waitFor(() => !bd.getElementById("refresh").disabled, "finish delete");
       if (removedNames.some(name=>peers[0].hasTag(name)) || peers[0].getTags().filter(tag=>tag.tag.startsWith("#BulkTag")).length !== 228) throw new Error("Bulk deletion did not preserve unselected tags");
       if (!peers[0].hasTag("Deep Learning") || taggedNote.getNote() !== noteBeforeMerge || peers[0].deleted) throw new Error("Deletion changed protected tags or items");
-      bulkDialog.close();
+      bulkDialog.dispatchEvent(new bulkDialog.KeyboardEvent("keydown",{key:"w",metaKey:!!Zotero.isMac,ctrlKey:!Zotero.isMac,cancelable:true}));
+      await waitFor(() => bulkDialog.closed, "Command-W close tag dialog");
       const corpus = SWScope.SWIndexer.corpus;
       if (!corpus._db) throw new Error("Index did not open");
       const semantic = SWScope.SWSemantic;

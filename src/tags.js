@@ -724,7 +724,7 @@ var SWTags = {
       url,
       "",
       "chrome,centerscreen,resizable,width=700,height=560",
-      { api: this, libraryID },
+      { api: this, libraryID, isMac: !!Zotero.isMac },
     );
     this._dialogs.add(dialog);
     // Ignore the initial about:blank unload during native window navigation.

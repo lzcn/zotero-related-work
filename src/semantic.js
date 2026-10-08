@@ -33,6 +33,7 @@ var SWSemantic = {
   _loaded: null,
   _notifiedAt: 0,
   _startupTimer: null,
+  _idleWait: null,
   _downloads: new Map(),
   _assetLoads: new Map(),
   _resourceHandler: null,
@@ -89,6 +90,7 @@ var SWSemantic = {
   },
 
   pause() {
+    this._idleWait?.();
     this._generation++;
     this._enabled = false;
     this._queue = [];
@@ -116,6 +118,7 @@ var SWSemantic = {
       this._queue.splice(this._queue.indexOf(key), 1);
     } else this._queued.add(key);
     if (priority) {
+      this._idleWait?.();
       this._priority.add(key);
       this._queue.unshift(key);
     } else this._queue.push(key);
@@ -146,6 +149,9 @@ var SWSemantic = {
         generation === this._generation &&
         this._queue.length
       ) {
+        if (!this._priority.size) await this._idle();
+        if (this._stopped || !this._enabled || generation !== this._generation)
+          break;
         const key = this._queue.shift();
         this._queued.delete(key);
         this._priority.delete(key);
@@ -165,6 +171,21 @@ var SWSemantic = {
       SWIndexer._reportStatus(true);
       SWSection.refreshSemantic();
     }
+  },
+
+  _idle() {
+    const win = Zotero.getMainWindow?.();
+    if (!win?.requestIdleCallback) return Promise.resolve();
+    return new Promise((resolve) => {
+      let id;
+      const release = () => {
+        if (id !== undefined) win.cancelIdleCallback(id);
+        if (this._idleWait === release) this._idleWait = null;
+        resolve();
+      };
+      this._idleWait = release;
+      id = win.requestIdleCallback(release, { timeout: 1000 });
+    });
   },
 
   async _rest(ms, generation = this._generation) {

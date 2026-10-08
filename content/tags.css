@@ -99,3 +99,13 @@ button {
 #merge[data-action="delete"]:not(:disabled) {
   background: var(--accent-red, #d73535);
 }
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+}

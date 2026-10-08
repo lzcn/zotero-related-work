@@ -335,3 +335,85 @@ test("tag-name inference reuses the paper vector and cached tags, serializes wit
   };
   assert.equal(await semantic.tagSimilarity({}, ["New"]), null);
 });
+
+test("background inference waits for host idle time and foreground selection releases that wait", async () => {
+  const { semantic, context } = fixture();
+  let idleCallback,
+    cancelled = 0;
+  context.Zotero.getMainWindow = () => ({
+    requestIdleCallback(callback) {
+      idleCallback = callback;
+      return 7;
+    },
+    cancelIdleCallback(id) {
+      assert.equal(id, 7);
+      cancelled++;
+    },
+  });
+  let done = false;
+  const idle = semantic._idle().then(() => {
+    done = true;
+  });
+  await Promise.resolve();
+  assert.equal(done, false);
+  semantic._enabled = true;
+  semantic._running = Promise.resolve();
+  semantic.corpus.docs.set("1/FOREGROUND", { hash: "selected" });
+  semantic.enqueue("1/FOREGROUND", true);
+  await idle;
+  assert.equal(done, true);
+  assert.equal(cancelled, 1);
+  assert.equal(semantic._idleWait, null);
+  const shutdownIdle = semantic._idle();
+  semantic.pause();
+  await shutdownIdle;
+  assert.equal(cancelled, 2);
+  assert.equal(semantic._idleWait, null);
+  assert.ok(idleCallback);
+});
+
+test("worker microbatches similar lengths and transfers normalized vectors in input order", async () => {
+  const source = fs
+    .readFileSync(path.join(__dirname, "../ml/worker.js"), "utf8")
+    .replace('import { env, pipeline } from "@huggingface/transformers";', "");
+  const messages = [],
+    batches = [];
+  const context = vm.createContext({
+    env: { backends: { onnx: { wasm: {} } } },
+    Response: globalThis.Response,
+    Float32Array,
+    pipeline: async () => async (texts) => {
+      batches.push(texts);
+      const data = new Float32Array(texts.length * 384);
+      texts.forEach((text, index) => {
+        data[index * 384 + Number(text[0])] = 1;
+      });
+      return { data, dims: [texts.length, 384] };
+    },
+    self: {
+      setTimeout(callback) {
+        callback();
+      },
+      postMessage(message, transfer) {
+        messages.push({ message, transfer });
+      },
+    },
+  });
+  vm.runInContext(source, context);
+  await context.self.onmessage({
+    data: { type: "init", id: 1, runtime: "local/", model: "fixture" },
+  });
+  const texts = ["1" + "a".repeat(100), "2tiny", "3" + "b".repeat(110)];
+  await context.self.onmessage({ data: { type: "encode", id: 2, texts } });
+  const result = messages.at(-1);
+  assert.deepEqual(
+    batches.map((batch) => batch.length),
+    [1, 2],
+  );
+  assert.equal(result.message.vectors.length, 3);
+  assert.equal(result.transfer.length, 3);
+  result.message.vectors.forEach((vector, index) => {
+    assert.equal(vector[index + 1], 1);
+    assert.equal(vector.length, 384);
+  });
+});

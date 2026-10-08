@@ -49,18 +49,41 @@ self.onmessage = async ({ data }) => {
       self.postMessage({ id: data.id, ready: true });
     } else if (data.type === "encode") {
       if (!extractor) throw new Error("Embedding model is not ready");
-      const vectors = [];
-      // Sequential chunks keep peak memory and CPU use bounded.
-      for (const text of data.texts) {
-        const result = await extractor(text, {
-          pooling: "mean",
-          normalize: true,
-          truncation: true,
-          max_length: 256,
+      const vectors = new Array(data.texts.length);
+      // Similar-length pairs limit padding; transfer vectors instead of cloning boxed numbers.
+      const ordered = data.texts
+        .map((text, index) => ({ text, index, length: text.length }))
+        .sort((a, b) => a.length - b.length);
+      for (let offset = 0; offset < ordered.length; ) {
+        const batch = [ordered[offset++]];
+        if (
+          offset < ordered.length &&
+          ordered[offset].length <= Math.max(80, batch[0].length * 1.5)
+        )
+          batch.push(ordered[offset++]);
+        const result = await extractor(
+          batch.map((entry) => entry.text),
+          {
+            pooling: "mean",
+            normalize: true,
+            padding: true,
+            truncation: true,
+            max_length: 256,
+          },
+        );
+        if (result.data.length !== batch.length * 384)
+          throw new Error("Invalid embedding batch dimensions");
+        batch.forEach((entry, index) => {
+          vectors[entry.index] = new Float32Array(
+            result.data.slice(index * 384, (index + 1) * 384),
+          );
         });
-        vectors.push(Array.from(result.data));
+        await new Promise((resolve) => self.setTimeout(resolve, 0));
       }
-      self.postMessage({ id: data.id, vectors });
+      self.postMessage(
+        { id: data.id, vectors },
+        vectors.map((vector) => vector.buffer),
+      );
     }
   } catch (error) {
     self.postMessage({ id: data.id, error: String(error.message || error) });

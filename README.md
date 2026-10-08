@@ -28,6 +28,10 @@ Tag names use spaces. In Settings, choose **Sentence case** (default) or **Title
 
 In **Settings → Related Work**, choose **Text** or **Semantic**. Semantic is currently macOS-only and uses `Xenova/all-MiniLM-L6-v2`, mainly for English papers. Its first use downloads about 23 MB of weights plus tokenizer files from Hugging Face, falling back to hf-mirror.com. It stores one local vector per paper; switching to Text pauses semantic indexing.
 
+Background semantic indexing waits for idle time; selecting a paper takes priority. Inference groups similar text lengths into small batches and transfers vectors directly from the worker. It uses local WASM; no native helper is required.
+
+On macOS, Tag Manager uses Command-A/F/W for select all, search and close. Search waits for IME composition and briefly coalesces typing updates. Reduced-motion settings disable interface transitions.
+
 Settings also show the current build, text index, semantic vector counts and live progress. The model is downloaded once; document text is processed locally.
 
 ## Data and backup

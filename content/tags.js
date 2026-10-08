@@ -1,6 +1,12 @@
 /* global window, document */
 (async () => {
-  const { api, libraryID } = window.arguments[0];
+  const { api, libraryID, isMac } = window.arguments[0];
+  const accel = (event) =>
+    (isMac ? event.metaKey : event.ctrlKey) &&
+    !event.altKey &&
+    !event.isComposing &&
+    event.keyCode !== 229;
+  let searchTimer = null;
   const search = document.getElementById("search");
   const duplicates = document.getElementById("duplicates");
   const list = document.getElementById("tags");
@@ -39,6 +45,7 @@
     "unload",
     () => {
       closed = true;
+      window.clearTimeout(searchTimer);
       revision++;
       renderRevision++;
     },
@@ -233,11 +240,7 @@
   }
   selectAll.addEventListener("change", () => chooseVisible(selectAll.checked));
   list.addEventListener("keydown", (event) => {
-    if (
-      (event.metaKey || event.ctrlKey) &&
-      !event.altKey &&
-      event.key.toLowerCase() === "a"
-    ) {
+    if (accel(event) && event.key.toLowerCase() === "a") {
       event.preventDefault();
       chooseVisible(true);
     }
@@ -253,8 +256,37 @@
   refresh.addEventListener("click", () => {
     if (!busy) void load().catch(report);
   });
-  search.addEventListener("input", () => {
-    void render().catch(report);
+  const searchChanged = (event) => {
+    window.clearTimeout(searchTimer);
+    renderRevision++;
+    if (event.isComposing) return;
+    searchTimer = window.setTimeout(() => {
+      if (active()) void render().catch(report);
+    }, 120);
+  };
+  search.addEventListener("input", searchChanged);
+  search.addEventListener("compositionend", searchChanged);
+  search.addEventListener("compositionstart", () => {
+    window.clearTimeout(searchTimer);
+    renderRevision++;
+  });
+  window.addEventListener("keydown", (event) => {
+    if (event.defaultPrevented || event.isComposing || event.keyCode === 229)
+      return;
+    if (accel(event) && event.key.toLowerCase() === "f") {
+      event.preventDefault();
+      search.focus();
+      search.select();
+    } else if (accel(event) && event.key.toLowerCase() === "w") {
+      event.preventDefault();
+      window.close();
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      if (search.value) {
+        search.value = "";
+        searchChanged(event);
+      } else window.close();
+    }
   });
   duplicates.addEventListener("change", () => {
     void render().catch(report);
