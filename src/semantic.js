@@ -2,9 +2,11 @@
 var SWSemantic = {
   model: "Xenova/all-MiniLM-L6-v2",
   revision: "751bff37182d3f1213fa05d7196b954e230abad9",
-  version: "minilm-l6-q8-v1",
+  version: "minilm-l6-fp32-v2",
   dimensions: 384,
   assets: {
+    "onnx/model.onnx":
+      "759c3cd2b7fe7e93933ad23c4c9181b7396442a2ed746ec7c1d46192c469c46e",
     "config.json":
       "7135149f7cffa1a573466c6e4d8423ed73b62fd2332c575bf738a0d033f70df7",
     "tokenizer.json":
@@ -280,7 +282,9 @@ var SWSemantic = {
         !active()
       )
         throw new Error("Semantic encoding cancelled");
-      return this._request("encode", { texts });
+      return this._native
+        ? this._nativeEncode(texts, generation, active)
+        : this._request("encode", { texts });
     });
     this._encoding = pending.catch(() => null);
     return pending;
@@ -543,6 +547,10 @@ var SWSemantic = {
       const win = Zotero.getMainWindow();
       if (!win) throw new Error("Open a Zotero window to initialize Semantic");
       this.status.state = "loading";
+      const generation = this._generation;
+      await this._startNative(generation);
+      if (this._stopped || !this._enabled || generation !== this._generation)
+        throw new Error("Native initialization cancelled");
       const handler = Services.io
         .getProtocolHandler("resource")
         .QueryInterface(Ci.nsIResProtocolHandler);
@@ -573,11 +581,193 @@ var SWSemantic = {
           runtime: "resource://similar-works/runtime/",
           model: this.model,
           revision: this.revision,
+          native: !!this._native,
         },
         180000,
       );
     })();
     return this._initializing;
+  },
+
+  _native: null,
+  _nativeBuffer: "",
+
+  _packageFile(name) {
+    const { NetUtil } = ChromeUtils.importESModule(
+      "resource://gre/modules/NetUtil.sys.mjs",
+    );
+    return new Promise((resolve, reject) => {
+      const channel = NetUtil.newChannel({
+        uri: SWPlugin.rootURI + name,
+        loadUsingSystemPrincipal: true,
+      });
+      NetUtil.asyncFetch(channel, (stream, status) => {
+        if (status) {
+          reject(new Error("Packaged resource read failed: " + name));
+          return;
+        }
+        try {
+          resolve(
+            new Uint8Array(NetUtil.readInputStream(stream, stream.available())),
+          );
+        } catch (error) {
+          reject(error);
+        }
+      });
+    });
+  },
+
+  async _startNative(generation) {
+    const { Subprocess } = ChromeUtils.importESModule(
+      "resource://gre/modules/Subprocess.sys.mjs",
+    );
+    const manifest = JSON.parse(
+      new TextDecoder().decode(await this._packageFile("native/manifest.json")),
+    );
+    const names = ["inference", "libonnxruntime.1.22.0.dylib"];
+    if (
+      !manifest?.files ||
+      names.some((name) => !/^[a-f0-9]{64}$/.test(manifest.files[name]))
+    )
+      throw new Error("Invalid native runtime manifest");
+    const dir = PathUtils.join(
+      Zotero.DataDirectory.dir,
+      "related-work",
+      "runtime",
+      manifest.files.inference,
+    );
+    await IOUtils.makeDirectory(dir, {
+      createAncestors: true,
+      ignoreExisting: true,
+    });
+    for (const name of names) {
+      const path = PathUtils.join(dir, name);
+      let valid = false;
+      if (await IOUtils.exists(path))
+        valid =
+          (await this._checksum(await IOUtils.read(path))) ===
+          manifest.files[name];
+      if (!valid) {
+        const bytes = await this._packageFile("native/" + name);
+        if ((await this._checksum(bytes)) !== manifest.files[name])
+          throw new Error("Native runtime checksum mismatch: " + name);
+        if (this._stopped || !this._enabled || generation !== this._generation)
+          throw new Error("Native initialization cancelled");
+        await IOUtils.write(path, bytes, { tmpPath: path + ".tmp" });
+      }
+    }
+    const command = PathUtils.join(dir, "inference");
+    await IOUtils.setPermissions(command, 0o700);
+    await this._modelFile("onnx/model.onnx");
+    if (this._stopped || !this._enabled || generation !== this._generation)
+      throw new Error("Native initialization cancelled");
+    const model = PathUtils.join(
+      Zotero.DataDirectory.dir,
+      "related-work",
+      "models",
+      this.version,
+      "onnx-model.onnx",
+    );
+    const process = await Subprocess.call({
+      command,
+      arguments: [model],
+      stderr: "pipe",
+    });
+    if (this._stopped || !this._enabled || generation !== this._generation) {
+      await process.kill(0);
+      throw new Error("Native initialization cancelled");
+    }
+    this._native = process;
+    this._nativeBuffer = "";
+    // Drain stderr so a full pipe cannot block inference. Keep the latest diagnostic.
+    void (async () => {
+      try {
+        while (this._native === process) {
+          const text = await process.stderr.readString();
+          if (!text) break;
+          this.status.nativeDiagnostic = text.slice(-2000);
+        }
+      } catch (error) {
+        if (this._native === process) Zotero.logError(error);
+      }
+    })();
+    const ready = await this._nativeReply(process, 180000);
+    if (!ready.ready)
+      throw new Error(ready.error || "Native model did not initialize");
+    this.status.backend = ready.backend;
+    Zotero.debug("[related-work] Semantic backend: " + ready.backend);
+  },
+
+  async _nativeReply(process, timeout = 30000) {
+    let timer;
+    const read = async () => {
+      while (this._native === process) {
+        const index = this._nativeBuffer.indexOf("\n");
+        if (index >= 0) {
+          const line = this._nativeBuffer.slice(0, index);
+          this._nativeBuffer = this._nativeBuffer.slice(index + 1);
+          const value = JSON.parse(line);
+          if (value.error) throw new Error(value.error);
+          return value;
+        }
+        const part = await process.stdout.readString();
+        if (!part) throw new Error("Native inference process exited");
+        this._nativeBuffer += part;
+        if (this._nativeBuffer.length > 65536)
+          throw new Error("Native response too large");
+      }
+      throw new Error("Native inference cancelled");
+    };
+    try {
+      return await Promise.race([
+        read(),
+        new Promise((resolve, reject) => {
+          timer = setTimeout(() => {
+            this._terminate("Native inference timed out");
+            reject(new Error("Native inference timed out"));
+          }, timeout);
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+  },
+
+  async _nativeEncode(texts, generation, active) {
+    const process = this._native;
+    const { inputs } = await this._request("tokenize", { texts });
+    const vectors = [];
+    for (const input of inputs) {
+      if (
+        this._stopped ||
+        !this._enabled ||
+        generation !== this._generation ||
+        !active() ||
+        this._native !== process
+      )
+        throw new Error("Native inference cancelled");
+      await process.stdin.write(JSON.stringify(input) + "\n");
+      const result = await this._nativeReply(process);
+      if (
+        !Array.isArray(result.vector) ||
+        result.vector.length !== this.dimensions ||
+        result.vector.some((n) => !Number.isFinite(n))
+      )
+        throw new Error("Invalid native embedding");
+      this.status.backend = result.backend;
+      vectors.push(new Float32Array(result.vector));
+    }
+    return { vectors };
+  },
+
+  async _checksum(bytes) {
+    const digest = await Zotero.getMainWindow().crypto.subtle.digest(
+      "SHA-256",
+      bytes,
+    );
+    return Array.from(new Uint8Array(digest), (n) =>
+      n.toString(16).padStart(2, "0"),
+    ).join("");
   },
 
   _request(type, payload, timeout = 30000) {
@@ -692,18 +882,15 @@ var SWSemantic = {
   },
 
   async _validateAsset(filename, bytes) {
-    const digest = await Zotero.getMainWindow().crypto.subtle.digest(
-      "SHA-256",
-      bytes,
-    );
-    const hex = Array.from(new Uint8Array(digest), (n) =>
-      n.toString(16).padStart(2, "0"),
-    ).join("");
+    const hex = await this._checksum(bytes);
     if (hex !== this.assets[filename])
       throw new Error("Embedding asset checksum mismatch: " + filename);
   },
 
   _terminate(reason) {
+    const native = this._native;
+    this._native = null;
+    if (native) void native.kill(0).catch((error) => Zotero.logError(error));
     this._worker?.terminate();
     this._worker = null;
     this._initializing = null;

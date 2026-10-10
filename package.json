@@ -22,7 +22,8 @@
     "release": "npm run check && node scripts/package-release.mjs",
     "typecheck": "tsc --noEmit",
     "build:force": "node scripts/build.mjs --force",
-    "test:host": "node scripts/test-host.mjs"
+    "test:host": "node scripts/test-host.mjs",
+    "test:native": "node scripts/build-native.mjs && node scripts/test-native.mjs"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",

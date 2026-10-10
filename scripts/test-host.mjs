@@ -395,6 +395,28 @@ startup = async function(data) {
         throw new Error("Persisted native semantic vector failed to reload: " + JSON.stringify({array:Array.isArray(bytes),length:bytes.length,byteLength:bytes.byteLength,constructor:bytes.constructor?.name}));
       }
 
+      if (${JSON.stringify(process.env.SW_HOST_NATIVE_MODEL_DIR || "")}) {
+        const source = ${JSON.stringify(process.env.SW_HOST_NATIVE_MODEL_DIR || "")};
+        const target = PathUtils.join(Zotero.DataDirectory.dir, "related-work", "models", semantic.version);
+        await IOUtils.makeDirectory(target, { createAncestors:true, ignoreExisting:true });
+        for (const name of ["model.onnx", "tokenizer.json", "tokenizer_config.json", "config.json", "special_tokens_map.json"]) {
+          const filename = name === "model.onnx" ? "onnx-model.onnx" : name;
+          if (await IOUtils.exists(PathUtils.join(source, name)))
+            await IOUtils.copy(PathUtils.join(source, name), PathUtils.join(target, filename));
+        }
+        semantic._enabled = true;
+        await semantic._init();
+        const nativeProcess = semantic._native;
+        if (!nativeProcess) throw new Error("Native inference did not launch");
+        const encoded = await semantic._encode(["Spectral hashing for similarity search."]);
+        if (encoded.vectors.length !== 1 || encoded.vectors[0].length !== 384)
+          throw new Error("Native host inference returned invalid vector");
+        result.nativeBackend = semantic.status.backend;
+        semantic.pause();
+        const exit = await nativeProcess.wait();
+        if (semantic._native || !exit) throw new Error("Native inference leaked on pause");
+      }
+
       const originalBuild = semantic._build;
       let selectedBuilt = false;
       semantic.corpus.docs.set("1/HOST-PRIORITY", {hash: "priority"});
@@ -414,7 +436,17 @@ startup = async function(data) {
       const openManager = tagAPI.open(doc.defaultView,item.libraryID);
       await waitFor(() => openManager.document?.querySelectorAll('#tags input').length > 200, 'manager before shutdown');
       if (!tagAPI._dialogs.has(openManager)) throw new Error("Live manager window was not tracked");
+      let shutdownNative = null;
+      if (${JSON.stringify(process.env.SW_HOST_NATIVE_MODEL_DIR || "")}) {
+        semantic._enabled = true;
+        await semantic._init();
+        shutdownNative = semantic._native;
+      }
       await shutdown(data, 2);
+      if (shutdownNative) {
+        await shutdownNative.wait();
+        if (semantic._native) throw new Error("Shutdown leaked native inference");
+      }
       if (!openManager.closed) throw new Error("Shutdown did not close Tag Manager");
       if (corpus._db || SWScope.SWSection._registered || SWScope.SWSection._preferencePane || SWScope.SWSection._tagObserver || doc.getElementById("similar-works-organize-tags") || SWScope.SWTags._dialogs.size)
         throw new Error("Shutdown leaked resources");
@@ -448,13 +480,17 @@ try {
     new Promise((_, reject) => {
       timeout = setTimeout(
         () => reject(new Error("Zotero host test timed out")),
-        45000,
+        process.env.SW_HOST_NATIVE_MODEL_DIR ? 240000 : 45000,
       );
     }),
   ]);
   const result = JSON.parse(await readFile(marker, "utf8"));
   if (code !== 0 || !result.ok)
     throw new Error(JSON.stringify({ code, result }));
+  if (result.nativeBackend)
+    console.log(
+      "PASS Native host inference and cancellation: " + result.nativeBackend,
+    );
   console.log(
     "PASS Packaged startup, single registration, localized progress, narrow-sidebar text containment, native semantic vector reload and foreground scheduling, live build/index diagnostics, native settings saving, opt-in existing/new tag recommendations, native tag merge/normalization, persisted naming presets/hashtag, protected colored/excluded tags, complete tag list, shift/select-all and bulk formatting, shutdown cleanup.",
   );

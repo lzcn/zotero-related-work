@@ -25,3 +25,5 @@ project-maintained research names and aliases. Copyright 2018 The HuggingFace
 Inc. team. Licensed under Apache-2.0; a copy is bundled as
 runtime/transformers-LICENSE.
 Source: https://github.com/huggingface/transformers/blob/v4.57.1/src/transformers/models/auto/configuration_auto.py
+
+The macOS native helper bundles ONNX Runtime 1.22.0 (MIT). Its license and third-party notices are included under runtime/. Model weights are downloaded separately; the MiniLM model uses Apache-2.0.

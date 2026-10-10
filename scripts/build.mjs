@@ -17,6 +17,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import process from "node:process";
+import { prepareNativeSDK } from "./build-native.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
@@ -73,6 +74,7 @@ function inputs() {
     "icons",
     "locale",
     "ml",
+    "native",
     "data",
     "licenses",
     "types",
@@ -90,7 +92,7 @@ function inputs() {
   return JSON.stringify({
     source: fingerprint(paths),
     // Check dependency file metadata without rereading large WASM runtimes.
-    dependencies: fingerprint(["node_modules"], true),
+    dependencies: fingerprint(["node_modules", "build/native-sdk"], true),
     node: process.version,
     platform: process.platform,
     arch: process.arch,
@@ -103,6 +105,7 @@ function run(command, argv) {
   if (result.status !== 0) process.exit(result.status ?? 1);
 }
 
+await prepareNativeSDK();
 const before = inputs();
 let previous;
 try {

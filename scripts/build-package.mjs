@@ -8,6 +8,7 @@ import { validatePackage } from "./validate-package.mjs";
 import { build } from "esbuild";
 import { createHash } from "node:crypto";
 import { TextEncoder } from "node:util";
+import { buildNative } from "./build-native.mjs";
 import { requiredFiles } from "./package-files.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -119,6 +120,19 @@ files["runtime/onnxruntime-LICENSE"] = await readFile(
 files["runtime/onnxruntime-NOTICES"] = await readFile(
   join(root, "licenses/onnxruntime-notices.txt"),
 );
+
+// Native executables are extracted to a versioned local cache before launch.
+if (await buildNative()) {
+  const manifest = { files: {} };
+  for (const name of ["inference", "libonnxruntime.1.22.0.dylib"]) {
+    const bytes = await readFile(join(root, "build/native", name));
+    files[`native/${name}`] = bytes;
+    manifest.files[name] = createHash("sha256").update(bytes).digest("hex");
+  }
+  files["native/manifest.json"] = new TextEncoder().encode(
+    JSON.stringify(manifest),
+  );
+}
 
 // Identify the packaged inputs without adding timestamps or personal paths.
 const buildHash = createHash("sha256");

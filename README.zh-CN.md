@@ -26,9 +26,9 @@
 
 标签名称固定使用空格。在设置中选择 **句首大写**（默认）或 **每词首字母大写**，并单独选择是否加 `#`。已知模型名保留标准写法；现有缩写、`PyTorch` 这类混合大小写名称及 `co-attention` 这类词内连字符也会保留。本地 `data/tag-terms.json` 词表结合 Hugging Face Transformers 的模型名称与项目维护的研究术语，随插件打包，不会把标签名称发送到网上。有颜色的标签默认受保护；其他名称在 **排除标签** 中填写，每行一个，其同类写法也受保护。
 
-在 **设置 → Related Work** 中选择 **文本匹配** 或 **语义匹配**。语义匹配目前仅支持 macOS，使用 `Xenova/all-MiniLM-L6-v2`，主要适合英文文献。首次使用从 Hugging Face 下载约 23 MB 权重及分词文件，失败时使用 hf-mirror.com。每篇文献保存一个本地向量；切换到文本匹配会暂停语义索引。
+在 **设置 → Related Work** 中选择 **文本匹配** 或 **语义匹配**。语义匹配目前仅支持 macOS，使用 `Xenova/all-MiniLM-L6-v2`，主要适合英文文献。首次使用从 Hugging Face 下载约 90 MB 权重及分词文件，失败时使用 hf-mirror.com。每篇文献保存一个本地向量；切换到文本匹配会暂停语义索引。
 
-后台语义索引等待空闲时段，选中文献优先处理。推理按相近文本长度分成小批次，向量直接从 Worker 传递。使用本地 WASM，无需原生辅助程序。
+后台语义索引等待空闲时段，选中文献优先处理。分词在 Worker 中完成，推理按文本逐项执行。在 macOS 13.3 及以上版本，内置的通用原生辅助程序使用 ONNX Runtime 和 Core ML；初始化或推理失败时回退原生 CPU。Apple 选择可支持的硬件，不保证使用 Neural Engine。辅助程序以低优先级运行，暂停语义索引或退出 Zotero 时终止。旧语义向量保留在磁盘上，新向量按独立模型版本重建。
 
 macOS 标签管理器使用 Command-A/F/W 全选、搜索和关闭。搜索等待输入法组合结束，并短暂合并连续输入；减少动态效果设置会关闭界面过渡动画。
 
@@ -48,6 +48,8 @@ macOS 标签管理器使用 Command-A/F/W 全选、搜索和关闭。搜索等�
 - `npm run release`：完整检查后，在 `release/v<版本>/` 准备 XPI、`SHA256SUMS` 和 `updates.json`。
 
 `npm run test:host` 使用临时配置和数据目录验证安装包启动、本地化及资源释放。通过 `ZOTERO_BINARY` 指定其他宿主程序。
+
+macOS 构建需要 Xcode Command Line Tools。首次构建下载固定版本并校验 SHA-256 的 ONNX Runtime SDK。使用本地 `model.onnx` 和分词文件，可运行 `SW_NATIVE_MODEL_DIR=/path/to/local/model npm run test:native` 比较 Core ML 与 CPU 输出。
 
 构建产物：`dist/zotero-related-work.xpi`。安装后在 Zotero 中验证改动。本地发布准备不创建 tag 或上传文件。共同开发规范见工作区根目录 `AGENTS.md`。
 

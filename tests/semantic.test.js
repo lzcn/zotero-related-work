@@ -375,7 +375,10 @@ test("background inference waits for host idle time and foreground selection rel
 test("worker microbatches similar lengths and transfers normalized vectors in input order", async () => {
   const source = fs
     .readFileSync(path.join(__dirname, "../ml/worker.js"), "utf8")
-    .replace('import { env, pipeline } from "@huggingface/transformers";', "");
+    .replace(
+      'import { env, pipeline, AutoTokenizer } from "@huggingface/transformers";',
+      "",
+    );
   const messages = [],
     batches = [];
   const context = vm.createContext({
@@ -416,4 +419,70 @@ test("worker microbatches similar lengths and transfers normalized vectors in in
     assert.equal(vector[index + 1], 1);
     assert.equal(vector.length, 384);
   });
+});
+
+test("native transport assembles partial lines and preserves subsequent replies", async () => {
+  const { semantic } = fixture();
+  const chunks = ['{"ready":', 'true}\n{"backend":"cpu"}\n'];
+  const process = { stdout: { readString: async () => chunks.shift() || "" } };
+  semantic._native = process;
+  assert.equal((await semantic._nativeReply(process)).ready, true);
+  assert.equal((await semantic._nativeReply(process)).backend, "cpu");
+  await assert.rejects(semantic._nativeReply(process), /exited/);
+});
+
+test("pause immediately kills native inference and rejects worker requests", async () => {
+  const { semantic } = fixture();
+  let killed = null;
+  semantic._native = {
+    kill: async (timeout) => {
+      killed = timeout;
+    },
+  };
+  semantic._enabled = true;
+  semantic.pause();
+  assert.equal(killed, 0);
+  assert.equal(semantic._native, null);
+});
+
+test("native embeddings validate dimensions and stop between cancelled chunks", async () => {
+  const { semantic } = fixture();
+  semantic._enabled = true;
+  let writes = 0;
+  semantic._native = {
+    stdin: {
+      write: async () => {
+        writes++;
+      },
+    },
+  };
+  semantic._request = async () => ({
+    inputs: [{ input_ids: [] }, { input_ids: [] }],
+  });
+  semantic._nativeReply = async () => ({
+    vector: Array(384).fill(0),
+    backend: "cpu",
+  });
+  const result = await semantic._nativeEncode(
+    ["one", "two"],
+    semantic._generation,
+    () => true,
+  );
+  assert.equal(result.vectors.length, 2);
+  assert.equal(writes, 2);
+  writes = 0;
+  await assert.rejects(
+    semantic._nativeEncode(
+      ["one", "two"],
+      semantic._generation,
+      () => writes === 0,
+    ),
+    /cancelled/,
+  );
+  assert.equal(writes, 1);
+  semantic._nativeReply = async () => ({ vector: [1], backend: "cpu" });
+  await assert.rejects(
+    semantic._nativeEncode(["one"], semantic._generation, () => true),
+    /Invalid native/,
+  );
 });

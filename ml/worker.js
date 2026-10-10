@@ -1,4 +1,4 @@
-import { env, pipeline } from "@huggingface/transformers";
+import { env, pipeline, AutoTokenizer } from "@huggingface/transformers";
 
 // This worker only receives text from the add-on. Model files come from its
 // disk cache; inference makes no network requests and uses one WASM thread.
@@ -26,6 +26,7 @@ env.customCache = {
   async put() {},
 };
 let extractor;
+let tokenizer;
 self.onmessage = async ({ data }) => {
   if (data.type === "asset-result") {
     const pending = assets.get(data.id);
@@ -40,6 +41,13 @@ self.onmessage = async ({ data }) => {
         mjs: data.runtime + "ort-wasm-simd-threaded.mjs",
         wasm: data.runtime + "ort-wasm-simd-threaded.wasm",
       };
+      if (data.native) {
+        tokenizer = await AutoTokenizer.from_pretrained(data.model, {
+          revision: data.revision,
+        });
+        self.postMessage({ id: data.id, ready: true });
+        return;
+      }
       extractor = await pipeline("feature-extraction", data.model, {
         revision: data.revision,
         dtype: "q8",
@@ -47,6 +55,22 @@ self.onmessage = async ({ data }) => {
         session_options: { intraOpNumThreads: 1, interOpNumThreads: 1 },
       });
       self.postMessage({ id: data.id, ready: true });
+    } else if (data.type === "tokenize") {
+      if (!tokenizer) throw new Error("Tokenizer is not ready");
+      const inputs = data.texts.map((text) => {
+        const tokens = tokenizer(text, {
+          padding: "max_length",
+          truncation: true,
+          max_length: 256,
+        });
+        return Object.fromEntries(
+          Object.entries(tokens).map(([name, tensor]) => [
+            name,
+            Array.from(tensor.data, Number),
+          ]),
+        );
+      });
+      self.postMessage({ id: data.id, inputs });
     } else if (data.type === "encode") {
       if (!extractor) throw new Error("Embedding model is not ready");
       const vectors = new Array(data.texts.length);

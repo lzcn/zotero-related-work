@@ -26,9 +26,9 @@ Choose **Merge** (the default), **Rename**, or **Delete**. Merge combines select
 
 Tag names use spaces. In Settings, choose **Sentence case** (default) or **Title Case**, and optionally add a leading `#`. Known model names retain their official spelling; existing acronyms, mixed-case names such as `PyTorch`, and hyphenated words such as `co-attention` are preserved. The local dictionary in `data/tag-terms.json` combines model names from Hugging Face Transformers with maintained research terms. It is bundled with the plugin; no lookup sends tag names online. Colored tags are protected by default. Add other names to **Excluded tags**, one per line; their naming variants are protected too.
 
-In **Settings → Related Work**, choose **Text** or **Semantic**. Semantic is currently macOS-only and uses `Xenova/all-MiniLM-L6-v2`, mainly for English papers. Its first use downloads about 23 MB of weights plus tokenizer files from Hugging Face, falling back to hf-mirror.com. It stores one local vector per paper; switching to Text pauses semantic indexing.
+In **Settings → Related Work**, choose **Text** or **Semantic**. Semantic is currently macOS-only and uses `Xenova/all-MiniLM-L6-v2`, mainly for English papers. Its first use downloads about 90 MB of weights plus tokenizer files from Hugging Face, falling back to hf-mirror.com. It stores one local vector per paper; switching to Text pauses semantic indexing.
 
-Background semantic indexing waits for idle time; selecting a paper takes priority. Inference groups similar text lengths into small batches and transfers vectors directly from the worker. It uses local WASM; no native helper is required.
+Background semantic indexing waits for idle time; selecting a paper takes priority. Tokenization runs in a worker; native inference processes one text at a time. On macOS 13.3+, a bundled universal native helper uses ONNX Runtime with Core ML and falls back to native CPU if initialization or inference fails. Apple selects supported hardware; this does not guarantee Neural Engine execution. The helper runs at low priority and is terminated when semantic indexing pauses or Zotero exits. Older semantic vectors are retained on disk but rebuilt under a separate model version.
 
 On macOS, Tag Manager uses Command-A/F/W for select all, search and close. Search waits for IME composition and briefly coalesces typing updates. Reduced-motion settings disable interface transitions.
 
@@ -48,6 +48,8 @@ Use Node.js 22.13+ (22.x) or 24+. Run `npm ci`, then `npm run check`.
 - `npm run release`: full checks, then prepare the XPI, `SHA256SUMS` and `updates.json` under `release/v<version>/`.
 
 `npm run test:host` verifies packaged startup, localization and cleanup with temporary profile and data directories. Set `ZOTERO_BINARY` to select another host executable.
+
+macOS builds require Xcode Command Line Tools. The first build downloads a pinned, SHA-256-verified ONNX Runtime SDK. Run `SW_NATIVE_MODEL_DIR=/path/to/local/model npm run test:native` to compare Core ML and CPU outputs using local `model.onnx` and tokenizer files.
 
 Build output: `dist/zotero-related-work.xpi`. Install and verify changes in Zotero. Release preparation does not create a tag or upload files. Shared working rules live in the plugin workspace's root `AGENTS.md`.
 
