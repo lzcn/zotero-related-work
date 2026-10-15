@@ -14,10 +14,11 @@
   },
   "scripts": {
     "build": "node scripts/build.mjs",
+    "clean": "node scripts/clean.mjs",
     "lint": "npm run lint:check",
     "lint:check": "prettier --check . && eslint .",
     "lint:fix": "prettier --write . && eslint . --fix",
-    "test": "node tests/unit.test.js && node --test tests/integration.test.js tests/lifecycle.test.js tests/search.test.js tests/semantic.test.js tests/package.test.mjs tests/tags.test.js tests/graph.test.js tests/migration.test.js",
+    "test": "node tests/unit.test.js && node --test tests/integration.test.js tests/lifecycle.test.js tests/search.test.js tests/semantic.test.js tests/package.test.mjs tests/tags.test.js tests/graph.test.js tests/migration.test.js tests/build.test.mjs",
     "check": "npm run lint:check && node scripts/build.mjs --check && npm test",
     "release": "npm run check && node scripts/package-release.mjs",
     "typecheck": "tsc --noEmit",

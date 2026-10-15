@@ -1,5 +1,4 @@
 // Build a universal macOS helper against the pinned official ONNX Runtime SDK.
-import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import {
   mkdir,
@@ -8,6 +7,8 @@ import {
   readFile,
   readdir,
   rm,
+  rename,
+  mkdtemp,
 } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { spawnSync } from "node:child_process";
@@ -24,22 +25,68 @@ const output = join(root, "build/native");
 function run(cmd, args) {
   const result = spawnSync(cmd, args, { stdio: "inherit" });
   if (result.error) throw result.error;
-  if (result.status !== 0) throw new Error(`${cmd} failed: ${result.status}`);
+  if (result.status !== 0)
+    throw new Error(`${cmd} failed: ${result.signal || result.status}`);
 }
 export async function prepareNativeSDK() {
   if (process.platform !== "darwin") return false;
   await mkdir(cache, { recursive: true });
-  if (!existsSync(join(sdk, "include/onnxruntime_cxx_api.h"))) {
-    const url = `https://github.com/microsoft/onnxruntime/releases/download/v${version}/onnxruntime-osx-universal2-${version}.tgz`;
-    const response = await globalThis.fetch(url);
-    if (!response.ok)
-      throw new Error(`ONNX Runtime download failed: ${response.status}`);
-    const bytes = Buffer.from(await response.arrayBuffer());
-    if (createHash("sha256").update(bytes).digest("hex") !== checksum)
-      throw new Error("ONNX Runtime SDK checksum mismatch");
+  const complete = (directory) =>
+    existsSync(join(directory, "include/onnxruntime_cxx_api.h")) &&
+    existsSync(join(directory, `lib/libonnxruntime.${version}.dylib`));
+  if (!complete(sdk)) {
     const archive = join(cache, "sdk.tgz");
-    await writeFile(archive, bytes);
-    run("tar", ["-xzf", archive, "-C", cache]);
+    const url = `https://github.com/microsoft/onnxruntime/releases/download/v${version}/onnxruntime-osx-universal2-${version}.tgz`;
+    const verified = async (file) =>
+      existsSync(file) &&
+      createHash("sha256")
+        .update(await readFile(file))
+        .digest("hex") === checksum;
+    if (!(await verified(archive))) {
+      console.log("Downloading native build tools (first build only)...");
+      const temporary = `${archive}.${process.pid}.tmp`;
+      try {
+        run("curl", [
+          "--fail",
+          "--location",
+          "--show-error",
+          "--progress-bar",
+          "--connect-timeout",
+          "15",
+          "--max-time",
+          "180",
+          "--speed-limit",
+          "1024",
+          "--speed-time",
+          "30",
+          "--output",
+          temporary,
+          url,
+        ]);
+        if (!(await verified(temporary)))
+          throw new Error("Native build tools checksum mismatch");
+        await rename(temporary, archive);
+      } catch (error) {
+        throw new Error(
+          "Could not download native build tools. Check the network or proxy and run npm run build again.",
+          { cause: error },
+        );
+      } finally {
+        await rm(temporary, { force: true });
+      }
+    }
+    console.log("Preparing native build tools...");
+    const staging = await mkdtemp(join(cache, "extract-"));
+    try {
+      run("tar", ["-xzf", archive, "-C", staging]);
+      const extracted = join(staging, `onnxruntime-osx-universal2-${version}`);
+      if (!complete(extracted))
+        throw new Error("Native build tools archive is incomplete");
+      await rm(sdk, { recursive: true, force: true });
+      await rename(extracted, sdk);
+    } finally {
+      await rm(staging, { recursive: true, force: true });
+    }
   }
   return true;
 }
@@ -75,6 +122,7 @@ export async function buildNative() {
   }
   await rm(stateFile, { force: true });
   await mkdir(output, { recursive: true });
+  console.log("Compiling native helper...");
   run("xcrun", [
     "clang++",
     "-std=c++17",

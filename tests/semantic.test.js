@@ -343,6 +343,24 @@ test("model cache deduplicates loads and verifies downloaded bytes", async () =>
   assert.deepEqual(a, b);
 });
 
+test("failed cache maintenance leaves lexical retrieval available and prevents inference writes", async () => {
+  const { semantic, context } = fixture();
+  context.SWMigration = {
+    files: async () => {
+      throw new Error("Cache temporarily busy");
+    },
+  };
+  await semantic.start(semantic.corpus);
+  semantic.enable();
+  assert.equal(semantic._enabled, false);
+  assert.equal(semantic.status.state, "error");
+  assert.match(semantic.status.error, /temporarily busy/);
+  semantic.corpus.docs.set("1/Q", { hash: "query" });
+  semantic.corpus.search.search = async () => [{ key: "1/A", score: 0.8 }];
+  const result = await semantic.recommend("1/Q", 10);
+  assert.equal(result.matches[0].key, "1/A");
+});
+
 test("rapid method switches do not let an old worker failure poison the new queue", async () => {
   const { semantic, context } = fixture();
   semantic._enabled = true;

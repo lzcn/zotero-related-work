@@ -28,21 +28,21 @@ Choose **Merge** (the default), **Rename**, or **Delete**. Merge combines select
 
 Tag names use spaces. In Settings, choose **Sentence case** (default) or **Title Case**, and optionally add a leading `#`. Known model names retain their official spelling; existing acronyms, mixed-case names such as `PyTorch`, and hyphenated words such as `co-attention` are preserved. The local dictionary in `data/tag-terms.json` combines model names from Hugging Face Transformers with maintained research terms. It is bundled with the plugin; no lookup sends tag names online. Colored tags are protected by default. Add other names to **Excluded tags**, one per line; their naming variants are protected too.
 
-Recommendations automatically combine the existing field-weighted text search with local `Xenova/all-MiniLM-L6-v2` vectors using reciprocal rank fusion (RRF). The model, fusion weights and candidate limits are internal defaults. On macOS, the first use downloads about 90 MB of weights plus tokenizer files from Hugging Face, falling back to hf-mirror.com. The model mainly supports English papers and stores one local vector per paper. Text results remain available while it downloads or indexes, if inference fails, and on other platforms. Fusion ranks are not displayed as similarity percentages.
+Recommendations automatically combine text and local semantic matching. Matching settings and required files are managed internally. On macOS, the first use downloads about 90 MB of weights plus tokenizer files from Hugging Face, falling back to hf-mirror.com. The model mainly supports English papers and stores one local vector per paper. Text results remain available while it downloads or indexes, if inference fails, and on other platforms. Fusion ranks are not displayed as similarity percentages.
 
 Background semantic indexing waits for idle time; selecting a paper takes priority. Tokenization runs in a worker; native inference processes one text at a time. On macOS 13.3+, a bundled universal native helper uses ONNX Runtime with Core ML and falls back to native CPU if initialization or inference fails. Apple selects supported hardware; this does not guarantee Neural Engine execution. The helper runs at low priority and is terminated when semantic indexing pauses or Zotero exits. Cached vectors load in small, cancellable pages so startup can yield to Zotero’s interface.
 
 On macOS, Tag Manager uses Command-A/F/W for select all, search and close. Search waits for IME composition and briefly coalesces typing updates. Reduced-motion settings disable interface transitions.
 
-Settings also show the current build, text index, semantic vector counts and live progress. The model is downloaded once; document text is processed locally.
+Settings show preparation progress and processed paper counts, without model names, vector dimensions or build hashes. Required files are managed automatically; document text is processed locally.
 
 ## Data and backup
 
 The rebuildable index is in `related-work/similarity.sqlite` under the Zotero data directory. Progress is recorded in `related-work/index-status.json`. On first startup after the rename, the entire legacy `similar-works/` cache moves to `related-work/` before opening SQLite, including models and progress. If both directories exist, startup reports the conflict without overwriting either. The plugin does not modify Zotero's original full-text database.
 
-The hybrid-ranking update keeps the current MiniLM model, 384-dimensional vector format and database schema. Valid cached vectors and model files are reused; only missing or changed papers need encoding. Recommendation rankings are recalculated separately as needed, without a full-library rebuild.
+Updates reuse compatible cached vectors, model files and the existing database. Valid cached vectors and model files are reused; only missing or changed papers need encoding. Recommendation rankings are recalculated separately as needed, without a full-library rebuild.
 
-On upgrade, one SQLite transaction clears old recommendation ranks, retired quantized-model vectors, stale embeddings and orphan cache rows, then records completion. Failure or interruption rolls back the transaction for retry. Startup also removes the retired `minilm-l6-q8-v1` model, previous native runtime directories and recognized interrupted-download files before inference starts. Current model weights, valid vectors, Core ML compilation caches and recovery backups are preserved. Unrecognized files and directories outside the retired cache directories are left in place. Cleanup does not run a full database compaction during startup.
+On upgrade, one SQLite transaction clears old recommendation ranks, retired quantized-model vectors, stale embeddings and orphan cache rows, then records completion. Failure or interruption rolls back the transaction for retry. Cached files use fixed `related-work/model/` and `related-work/runtime/` directories. Startup moves reusable files out of legacy model/version directories and removes retired caches and interrupted downloads before inference starts. A private ownership manifest retires replaced model files and compilation caches on future updates; incompatible vectors are retired transactionally when the internal model version changes. Current model weights, valid vectors, Core ML compilation caches and recovery backups are preserved. Unrecognized files and directories outside the retired cache directories are left in place. Cleanup does not run a full database compaction during startup.
 
 Obsolete algorithm and tag-format preferences are removed after carrying the old Title Case choice into the current naming setting. Existing tags are not renamed. File cleanup is repeatable, skips symlinked cache trees and finishes its current operation before shutdown.
 
@@ -50,14 +50,15 @@ Obsolete algorithm and tag-format preferences are removed after carrying the old
 
 Use Node.js 22.13+ (22.x) or 24+. Run `npm ci`, then `npm run check`.
 
-- `npm run build`: reuse valid output when inputs have not changed.
+- `npm run build`: reuse valid output when inputs have not changed. Run `npm run build` in the parent workspace to build and install all three plugins.
+- `npm run clean`: remove generated build output; retain downloaded tools, dependencies, research data and releases.
 - `npm run build:force`: rebuild from scratch.
 - `npm run check`: formatting, lint, tests and type checking; reuse valid XPI output.
 - `npm run release`: full checks, then prepare the XPI, `SHA256SUMS` and `updates.json` under `release/v<version>/`.
 
 `npm run test:host` verifies packaged startup, localization and cleanup with temporary profile and data directories. Set `ZOTERO_BINARY` to select another host executable. Set `SW_HOST_NATIVE_MODEL_DIR` to a local directory containing `model.onnx` and tokenizer files to test native hybrid retrieval and shutdown; the test copies them into its temporary data directory.
 
-macOS builds require Xcode Command Line Tools. The first build downloads a pinned, SHA-256-verified ONNX Runtime SDK. Run `SW_NATIVE_MODEL_DIR=/path/to/local/model npm run test:native` to compare Core ML and CPU outputs using local `model.onnx` and tokenizer files.
+Builds report input checks, required downloads, compilation and packaging. macOS builds require Xcode Command Line Tools. The first build downloads a pinned, SHA-256-verified ONNX Runtime SDK with progress and a bounded timeout. Failed downloads remove partial files; verified archives are reused. `npm run clean` retains this download so rebuilding works without downloading it again. Run `SW_NATIVE_MODEL_DIR=/path/to/local/model npm run test:native` to compare Core ML and CPU outputs using local `model.onnx` and tokenizer files.
 
 The offline `scripts/benchmark-retrieval.py` and `scripts/benchmark-retrieval.mjs` compare paper embeddings, lexical search and RRF against separately annotated judgments. Private corpus snapshots, pinned model revisions, frozen judgments, timings and results stay under the ignored `build/retrieval-benchmark/` directory; none are packaged.
 

@@ -97,8 +97,8 @@ startup = async function(data) {
       if (Zotero.Prefs.get("similar-works.tagNameStyle")!=="title" || Zotero.Prefs.get("similar-works.maxRecommendations")!==15) throw new Error("Preference migration lost the selected naming style or result count");
       Zotero.Prefs.set("similar-works.tagNameStyle","sentence");
       const migratedRoot=PathUtils.join(Zotero.DataDirectory.dir,"related-work");
-      if (await IOUtils.exists(PathUtils.join(migratedRoot,"models","minilm-l6-q8-v1")) || await IOUtils.exists(PathUtils.join(migratedRoot,"runtime","f".repeat(64))) || await IOUtils.exists(PathUtils.join(migratedRoot,"models","minilm-l6-fp32-v2","onnx-model.onnx.tmp"))) throw new Error("Retired cache files survived migration");
-      if (await IOUtils.readUTF8(PathUtils.join(migratedRoot,"models","minilm-l6-fp32-v2","coreml-cache","preserve-marker"))!=="preserve compiled model") throw new Error("Cleanup removed current Core ML cache");
+      if (await IOUtils.exists(PathUtils.join(migratedRoot,"models","minilm-l6-q8-v1")) || await IOUtils.exists(PathUtils.join(migratedRoot,"runtime","f".repeat(64))) || await IOUtils.exists(PathUtils.join(migratedRoot,"model","onnx-model.onnx.tmp"))) throw new Error("Retired cache files survived migration");
+      if (await IOUtils.readUTF8(PathUtils.join(migratedRoot,"model","coreml-cache","preserve-marker"))!=="preserve compiled model") throw new Error("Cleanup removed current Core ML cache");
       result.cleanup=true;
       if (${JSON.stringify(process.env.SW_HOST_CACHE_SNAPSHOT || "")}) {
         const cachePath = PathUtils.join(Zotero.DataDirectory.dir,"upgrade-cache-test.sqlite");
@@ -359,9 +359,10 @@ startup = async function(data) {
       if (!limit) throw new Error("Settings controls did not load");
       if (settings.document.getElementById("similar-works-method")) throw new Error("Internal retrieval algorithm is exposed in Settings");
       if (settings.document.querySelector('[id^="similar-works-graph-"]')) throw new Error("Graph internals are exposed in Settings");
-      const buildLabel = settings.document.getElementById("similar-works-build");
-      for (let n = 0; n < 100 && !buildLabel?.textContent.trim(); n++) await new Promise(resolve => setTimeout(resolve, 50));
-      if (!buildLabel?.textContent.match(/[0-9a-f]{12}/) || !settings.document.getElementById("similar-works-model").textContent.includes("384")) throw new Error("Build or model diagnostics did not load in native Settings");
+      const matchingLabel = settings.document.getElementById("similar-works-vectors");
+      for (let n = 0; n < 100 && !matchingLabel?.textContent.trim(); n++) await new Promise(resolve => setTimeout(resolve, 50));
+      if (!matchingLabel?.textContent.trim() || settings.document.getElementById("similar-works-model") || settings.document.getElementById("similar-works-build")) throw new Error("Settings did not show simple preparation status without model internals");
+      if (settings.document.documentElement.textContent.includes("minilm-l6") || settings.document.documentElement.textContent.includes("Xenova/")) throw new Error("Model identity leaked into Settings");
       const mainWindow = Zotero.getMainWindow();
       const originalStatus = mainWindow.similarWorksStatus;
       const snapshot = originalStatus();

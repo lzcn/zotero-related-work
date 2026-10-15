@@ -5,6 +5,7 @@ const os = require("node:os");
 const path = require("node:path");
 const vm = require("node:vm");
 const { DatabaseSync } = require("node:sqlite");
+const crypto = require("node:crypto");
 global.SWSearch = require("../src/search.js").SWSearch;
 const { SWCorpus } = require("../src/corpus.js");
 const { SWSemantic } = require("../src/semantic.js");
@@ -177,18 +178,19 @@ function files(t, initialPrefs = {}) {
   const root = path.join(data, "related-work"),
     models = path.join(root, "models"),
     runtime = path.join(root, "runtime");
-  const current = path.join(models, SWSemantic.version),
+  const legacyCurrent = path.join(models, SWSemantic.version),
+    current = path.join(root, "model"),
     retired = path.join(models, "minilm-l6-q8-v1");
-  const keepHash = "a".repeat(64),
+  const keepHash = crypto.createHash("sha256").update("preserve").digest("hex"),
     oldHash = "b".repeat(64);
   const write = (name, text = "preserve") => {
     fs.mkdirSync(path.dirname(name), { recursive: true });
     fs.writeFileSync(name, text);
   };
-  write(path.join(current, "onnx-model.onnx"));
-  write(path.join(current, "coreml-cache", "compiled.bin"));
-  write(path.join(current, "onnx-model.onnx.tmp"), "partial");
-  write(path.join(current, "research.tmp"), "unknown-user-file");
+  write(path.join(legacyCurrent, "onnx-model.onnx"));
+  write(path.join(legacyCurrent, "coreml-cache", "compiled.bin"));
+  write(path.join(legacyCurrent, "onnx-model.onnx.tmp"), "partial");
+  write(path.join(legacyCurrent, "research.tmp"), "unknown-user-file");
   write(path.join(retired, "onnx-model_quantized.onnx"), "obsolete");
   write(path.join(models, "unknown-model", "keep"));
   write(path.join(runtime, keepHash, "inference"));
@@ -204,6 +206,7 @@ function files(t, initialPrefs = {}) {
     Zotero: {
       DataDirectory: { dir: data },
       isMac: true,
+      logError() {},
       Prefs: {
         get: (k) => userPrefs.get(k) ?? defaults.get(k),
         set: (k, v) => userPrefs.set(k, v),
@@ -220,6 +223,15 @@ function files(t, initialPrefs = {}) {
     },
     IOUtils: {
       exists: async (name) => fs.existsSync(name),
+      read: async (name) => new Uint8Array(fs.readFileSync(name)),
+      readUTF8: async (name) => fs.readFileSync(name, "utf8"),
+      writeUTF8: async (name, text) => fs.writeFileSync(name, text),
+      makeDirectory: async (name) => fs.mkdirSync(name, { recursive: true }),
+      move: async (source, target, options) => {
+        if (options?.noOverwrite && fs.existsSync(target))
+          throw new Error("Destination exists");
+        fs.renameSync(source, target);
+      },
       getChildren: async (name) =>
         fs.readdirSync(name).map((child) => path.join(name, child)),
       remove: async (name, options) => {
@@ -231,7 +243,11 @@ function files(t, initialPrefs = {}) {
     TextDecoder,
     SWSemantic: {
       version: SWSemantic.version,
-      assets: SWSemantic.assets,
+      assets: Object.fromEntries(
+        Object.keys(SWSemantic.assets).map((name) => [name, keepHash]),
+      ),
+      _checksum: async (bytes) =>
+        crypto.createHash("sha256").update(bytes).digest("hex"),
       _packageFile: async () =>
         new TextEncoder().encode(
           JSON.stringify({ files: { inference: keepHash } }),
@@ -247,6 +263,7 @@ function files(t, initialPrefs = {}) {
     root,
     models,
     current,
+    legacyCurrent,
     retired,
     runtime,
     keepHash,
@@ -298,11 +315,11 @@ test("file cleanup retires only known model/runtime caches, retains Core ML and 
     false,
   );
   for (const name of [
-    path.join(h.current, "onnx-model.onnx"),
+    path.join(h.current, "model.onnx"),
     path.join(h.current, "coreml-cache", "compiled.bin"),
     path.join(h.models, "unknown-model", "keep"),
     path.join(h.current, "research.tmp"),
-    path.join(h.runtime, h.keepHash, "inference"),
+    path.join(h.runtime, "inference"),
     path.join(h.runtime, "unknown-directory", "keep"),
   ])
     assert.equal(fs.existsSync(name), true, name);
@@ -366,16 +383,135 @@ test("restart finishes interrupted file cleanup while current model and compiled
   assert.equal(fs.existsSync(h.retired), false);
   assert.equal(fs.existsSync(path.join(h.runtime, h.oldHash)), true);
   assert.equal(
-    fs.existsSync(path.join(h.current, "coreml-cache", "compiled.bin")),
+    fs.existsSync(path.join(h.legacyCurrent, "coreml-cache", "compiled.bin")),
     true,
   );
   vm.runInContext(migrationSource, h.context);
   h.context.swYield = async () => {};
   await h.context.SWMigration.files(() => true);
   assert.equal(fs.existsSync(path.join(h.runtime, h.oldHash)), false);
-  assert.equal(fs.existsSync(path.join(h.current, "onnx-model.onnx")), true);
+  assert.equal(fs.existsSync(path.join(h.current, "model.onnx")), true);
   assert.equal(
     fs.existsSync(path.join(h.current, "coreml-cache", "compiled.bin")),
     true,
+  );
+});
+
+test("upgrades replace owned model files in place, retire obsolete compiled files and retain unknown files", async (t) => {
+  const h = files(t);
+  await h.api.files(() => true);
+  h.write(path.join(h.current, "retired-weights.bin"), "obsolete");
+  h.write(
+    path.join(h.current, ".manifest.json"),
+    JSON.stringify({
+      version: "retired-model",
+      files: { "retired-weights.bin": "old", "../outside": "unsafe" },
+    }),
+  );
+  h.api._files = null;
+  await h.api.files(() => true);
+  assert.equal(
+    fs.existsSync(path.join(h.current, "retired-weights.bin")),
+    false,
+  );
+  assert.equal(fs.existsSync(path.join(h.current, "coreml-cache")), false);
+  assert.equal(
+    fs.readFileSync(path.join(h.current, "model.onnx"), "utf8"),
+    "preserve",
+  );
+  assert.equal(
+    fs.readFileSync(path.join(h.current, "research.tmp"), "utf8"),
+    "unknown-user-file",
+  );
+  assert.equal(fs.existsSync(path.join(h.runtime, h.keepHash)), false);
+  assert.equal(fs.existsSync(path.join(h.runtime, "inference")), true);
+});
+
+test("a later model can upgrade directly from a legacy installation without retaining retired model directories", async (t) => {
+  const h = files(t);
+  h.context.SWSemantic.version = "replacement-model";
+  await h.api.files(() => true);
+  assert.equal(fs.existsSync(h.legacyCurrent), false);
+  assert.equal(fs.existsSync(h.retired), false);
+  assert.equal(
+    fs.existsSync(path.join(h.models, "unknown-model", "keep")),
+    true,
+  );
+  const state = JSON.parse(
+    fs.readFileSync(path.join(h.current, ".manifest.json"), "utf8"),
+  );
+  assert.equal(state.version, "replacement-model");
+});
+
+test("existing fixed caches reuse valid legacy bytes and recover a corrupt ownership manifest", async (t) => {
+  const h = files(t);
+  h.write(path.join(h.current, "model.onnx"), "damaged");
+  h.write(path.join(h.current, ".manifest.json"), "interrupted");
+  await h.api.files(() => true);
+  assert.equal(
+    fs.readFileSync(path.join(h.current, "model.onnx"), "utf8"),
+    "preserve",
+  );
+  assert.equal(
+    fs.existsSync(path.join(h.legacyCurrent, "onnx-model.onnx")),
+    false,
+  );
+  assert.equal(
+    fs.existsSync(path.join(h.current, "coreml-cache", "compiled.bin")),
+    true,
+  );
+  const manifest = JSON.parse(
+    fs.readFileSync(path.join(h.current, ".manifest.json"), "utf8"),
+  );
+  assert.equal(manifest.version, SWSemantic.version);
+  assert.ok(manifest.files["model.onnx"]);
+});
+
+test("model changes retire incompatible cached vectors transactionally without touching current vectors", async (t) => {
+  const h = files(t),
+    { db, corpus, vector, intercept } = database(t);
+  await h.api.embeddings(corpus, () => true);
+  assert.deepEqual(
+    db
+      .prepare("SELECT key FROM embeddings ORDER BY key")
+      .all()
+      .map((r) => r.key),
+    ["orphan", "stale", "valid"],
+  );
+  assert.deepEqual(
+    new Uint8Array(
+      db
+        .prepare("SELECT vector FROM embeddings WHERE key='valid'")
+        .get().vector,
+    ),
+    vector,
+  );
+  db.prepare("INSERT INTO recommendations VALUES ('current','fresh')").run();
+  await h.api.embeddings(corpus, () => true);
+  assert.equal(
+    db.prepare("SELECT COUNT(*) AS n FROM recommendations").get().n,
+    1,
+  );
+  h.context.SWSemantic.version = "replacement-model";
+  let active = true;
+  intercept((sql) => {
+    if (sql === "DELETE FROM recommendations") active = false;
+  });
+  await assert.rejects(
+    h.api.embeddings(corpus, () => active),
+    /cancelled/,
+  );
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM embeddings").get().n, 3);
+  assert.equal(
+    db.prepare("SELECT v FROM meta WHERE k='embeddingModel'").get().v,
+    SWSemantic.version,
+  );
+  active = true;
+  intercept(() => {});
+  await h.api.embeddings(corpus, () => active);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM embeddings").get().n, 0);
+  assert.equal(
+    db.prepare("SELECT v FROM meta WHERE k='embeddingModel'").get().v,
+    "replacement-model",
   );
 });

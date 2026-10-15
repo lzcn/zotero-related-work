@@ -23,22 +23,20 @@ similar-works-pref-limit =
 similar-works-pref-metadata =
     .label = 包含没有全文的文献
 
-similar-works-pref-intro = 自动查找相关文献。在 macOS 上，本地模型就绪后会结合语义匹配改进文本结果。首次使用需下载模型，文献内容不会上传。
-similar-works-pref-index-heading = 索引状态
-similar-works-pref-build = 当前构建
-similar-works-pref-index = 文本索引
-similar-works-pref-vectors = 语义向量
-similar-works-pref-model = 模型
-similar-works-pref-model-value = { $model } · { $dimensions } 维 · { $version }
+similar-works-pref-intro = 自动查找相关文献，所需文件自动准备。文献内容仅在本机处理。
+similar-works-pref-index-heading = 状态
+similar-works-pref-index = 文献整理
+similar-works-pref-vectors = 相关文献匹配
+similar-works-pref-error = 暂时无法完成准备，请稍后重启 Zotero 重试。
 similar-works-pref-index-value = { $known ->
-    [1] { $phase } · 已索引 { $count } / { $total } 篇 · 待处理 { $pending } 篇
-   *[0] { $phase } · 已索引 { $count } 篇 · 待处理 { $pending } 篇
+    [1] { $phase } · 已处理 { $count } / { $total } 篇
+   *[0] { $phase } · 已处理 { $count } 篇
     }
-similar-works-pref-vector-value = { $phase } · 已生成 { $count } / { $total } 篇 · 待处理 { $pending } 篇
+similar-works-pref-vector-value = { $phase } · 已处理 { $count } / { $total } 篇
 similar-works-pref-index-progress =
     .aria-label = 文本索引进度
 similar-works-pref-vector-progress =
-    .aria-label = 语义向量生成进度
+    .aria-label = 相关文献匹配进度
 similar-works-state-preparing = 正在加载索引
 similar-works-state-waiting = 等待处理
 similar-works-state-scanning = 正在扫描文献库
@@ -47,8 +45,8 @@ similar-works-state-idle = 已完成
 similar-works-state-disabled = 已暂停
 similar-works-state-stopped = 已停止
 similar-works-state-error = 处理失败
-similar-works-state-loading = 正在加载模型
-similar-works-state-downloading = 正在下载模型
+similar-works-state-loading = 正在准备匹配
+similar-works-state-downloading = 正在准备所需文件
 
 similar-works-tags-suggested = 推荐标签
 similar-works-tags-organize = 标签管理

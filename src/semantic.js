@@ -34,6 +34,7 @@ var SWSemantic = {
   _stopped: false,
   _enabled: false,
   _loaded: null,
+  _cacheError: null,
   _notifiedAt: 0,
   _startupTimer: null,
   _idleWait: null,
@@ -50,10 +51,18 @@ var SWSemantic = {
     this.corpus = corpus;
     await corpus.ready;
     if (this._stopped || corpus.progress.phase !== "ready") return;
-    if (typeof SWMigration !== "undefined")
-      await SWMigration.files(() => !this._stopped).catch((error) =>
-        Zotero.logError(error),
-      );
+    if (typeof SWMigration !== "undefined") {
+      try {
+        await SWMigration.files(() => !this._stopped);
+        if (!this._stopped)
+          await SWMigration.embeddings(corpus, () => !this._stopped);
+      } catch (error) {
+        this._cacheError = error;
+        this.status.state = "error";
+        this.status.error = String(error.message || error);
+        Zotero.logError(error);
+      }
+    }
     if (this._stopped) return;
     let afterKey = "",
       sliceStarted = Date.now();
@@ -89,7 +98,12 @@ var SWSemantic = {
     }
     if (this._stopped) return;
     this.status.indexedItems = this.vectors.size;
-    if (Zotero.isMac && !this._enabled && !this._startupTimer) {
+    if (
+      Zotero.isMac &&
+      !this._enabled &&
+      !this._startupTimer &&
+      !this._cacheError
+    ) {
       this._startupTimer = setTimeout(() => {
         this._startupTimer = null;
         if (!this._stopped) this.enable();
@@ -98,7 +112,7 @@ var SWSemantic = {
   },
 
   enable() {
-    if (this._stopped) return;
+    if (this._stopped || this._cacheError) return;
     clearTimeout(this._startupTimer);
     this._startupTimer = null;
     this._enabled = true;
@@ -689,7 +703,6 @@ var SWSemantic = {
       Zotero.DataDirectory.dir,
       "related-work",
       "runtime",
-      manifest.files.inference,
     );
     await IOUtils.makeDirectory(dir, {
       createAncestors: true,
@@ -719,9 +732,8 @@ var SWSemantic = {
     const model = PathUtils.join(
       Zotero.DataDirectory.dir,
       "related-work",
-      "models",
-      this.version,
-      "onnx-model.onnx",
+      "model",
+      "model.onnx",
     );
     const process = await Subprocess.call({
       command,
@@ -887,10 +899,9 @@ var SWSemantic = {
     const dir = PathUtils.join(
       Zotero.DataDirectory.dir,
       "related-work",
-      "models",
-      this.version,
+      "model",
     );
-    const file = PathUtils.join(dir, filename.replaceAll("/", "-"));
+    const file = PathUtils.join(dir, filename.split("/").pop());
     if (await IOUtils.exists(file)) {
       try {
         const bytes = await IOUtils.read(file);

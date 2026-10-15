@@ -23,22 +23,20 @@ similar-works-pref-limit =
 similar-works-pref-metadata =
     .label = Include items without full text
 
-similar-works-pref-intro = Find related papers automatically. On macOS, local semantic matching improves text results when the model is ready. The model downloads once; document text stays on this computer.
-similar-works-pref-index-heading = Index status
-similar-works-pref-build = Build
-similar-works-pref-index = Text index
-similar-works-pref-vectors = Semantic vectors
-similar-works-pref-model = Model
-similar-works-pref-model-value = { $model } · { $dimensions } dimensions · { $version }
+similar-works-pref-intro = Find related papers automatically. Required files are prepared automatically; document text stays on this computer.
+similar-works-pref-index-heading = Status
+similar-works-pref-index = Library preparation
+similar-works-pref-vectors = Related paper matching
+similar-works-pref-error = Preparation could not finish. Restart Zotero later to try again.
 similar-works-pref-index-value = { $known ->
-    [1] { $phase } · { $count } of { $total } indexed · { $pending } pending
-   *[0] { $phase } · { $count } indexed · { $pending } pending
+    [1] { $phase } · { $count } of { $total } papers processed
+   *[0] { $phase } · { $count } papers processed
     }
-similar-works-pref-vector-value = { $phase } · { $count } of { $total } · { $pending } pending
+similar-works-pref-vector-value = { $phase } · { $count } of { $total } papers processed
 similar-works-pref-index-progress =
     .aria-label = Text indexing progress
 similar-works-pref-vector-progress =
-    .aria-label = Semantic indexing progress
+    .aria-label = Related paper matching progress
 similar-works-state-preparing = Loading index
 similar-works-state-waiting = Waiting
 similar-works-state-scanning = Scanning library
@@ -47,8 +45,8 @@ similar-works-state-idle = Up to date
 similar-works-state-disabled = Paused
 similar-works-state-stopped = Stopped
 similar-works-state-error = Failed
-similar-works-state-loading = Loading model
-similar-works-state-downloading = Downloading model
+similar-works-state-loading = Preparing matching
+similar-works-state-downloading = Preparing required files
 
 similar-works-tags-suggested = Suggested tags
 similar-works-tags-organize = Tag Manager
