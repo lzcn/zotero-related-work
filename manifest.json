@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "Related Work",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Find similar works in your Zotero library using existing full-text indexes. Local, incremental, and lightweight.",
   "author": "Zhi Lu",
   "applications": {

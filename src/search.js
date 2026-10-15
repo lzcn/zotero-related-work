@@ -375,6 +375,24 @@ var SWSearch = (() => {
     }
     return lo;
   }
+  function fuse(rankings, k = 50) {
+    const scores = new Map();
+    // Fixed equal-weight RRF, validated on local paper-to-paper retrieval.
+    const normalizer = rankings.length / 61;
+    for (const ranking of rankings) {
+      const seen = new Set();
+      ranking.slice(0, 100).forEach((match, rank) => {
+        if (seen.has(match.key)) return;
+        seen.add(match.key);
+        const result = scores.get(match.key) || { ...match, score: 0 };
+        result.score += 1 / (61 + rank) / normalizer;
+        scores.set(match.key, result);
+      });
+    }
+    return [...scores.values()]
+      .sort((a, b) => b.score - a.score || a.key.localeCompare(b.key))
+      .slice(0, k);
+  }
   class Posting {
     constructor() {
       this.ids = new Uint32Array(4);
@@ -776,6 +794,7 @@ var SWSearch = (() => {
     decodeSimhash,
     distance,
     cosine,
+    fuse,
     SIGNATURE_SIZE,
     CANDIDATES,
   };

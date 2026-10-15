@@ -12,6 +12,9 @@ declare const SWTokenizer: {
   isStopword: typeof import("../src/tokenizer").swIsStopword;
 };
 declare namespace Zotero {
+  namespace Prefs {
+    function prefHasUserValue(name: string, global?: boolean): boolean;
+  }
   const Fulltext: {
     isCachedMIMEType(mime: string): boolean;
     getItemCacheFile(item: Item): { path: string };
@@ -22,5 +25,7 @@ declare namespace Zotero {
 declare const APP_SHUTDOWN: number;
 
 declare const SWSemantic: typeof import("../src/semantic").SWSemantic;
+declare const SWMigration: typeof import("../src/migration").SWMigration;
 
 declare const SWTags: typeof import("../src/tags").SWTags;
+declare const SWGraph: typeof import("../src/graph").SWGraph;

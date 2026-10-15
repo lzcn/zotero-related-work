@@ -1,0 +1,79 @@
+<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <head>
+    <meta charset="utf-8" />
+    <title data-l10n-id="similar-works-graph-title"></title>
+    <link rel="localization" href="similar-works.ftl" />
+    <link rel="stylesheet" href="chrome://global/skin/" />
+    <link rel="stylesheet" href="chrome://zotero/skin/zotero.css" />
+    <link rel="stylesheet" href="graph.css" />
+  </head>
+  <body>
+    <header>
+      <input
+        id="search"
+        type="search"
+        data-l10n-id="similar-works-graph-search"
+      />
+      <span class="spacer"></span>
+      <button id="fit" data-l10n-id="similar-works-graph-fit"></button>
+      <button id="refresh" data-l10n-id="similar-works-graph-refresh"></button>
+      <button
+        id="cancel"
+        hidden="hidden"
+        data-l10n-id="similar-works-graph-cancel"
+      ></button>
+    </header>
+    <main>
+      <div id="viewport">
+        <canvas
+          id="graph"
+          tabindex="0"
+          data-l10n-id="similar-works-graph-canvas"
+        ></canvas>
+        <span
+          id="empty"
+          hidden="hidden"
+          data-l10n-id="similar-works-graph-empty"
+        ></span>
+      </div>
+      <div
+        id="splitter"
+        role="separator"
+        aria-orientation="vertical"
+        tabindex="0"
+        data-l10n-id="similar-works-graph-resize"
+      ></div>
+      <aside id="inspector">
+        <div id="selection" hidden="hidden">
+          <h2 id="node-title"></h2>
+          <p id="node-meta" class="muted"></p>
+          <button id="open" data-l10n-id="similar-works-graph-open"></button>
+          <p id="node-tags" class="muted"></p>
+          <p id="node-abstract"></p>
+          <h3 data-l10n-id="similar-works-graph-connections"></h3>
+          <div id="connections"></div>
+        </div>
+        <p id="hint" class="muted" data-l10n-id="similar-works-graph-hint"></p>
+      </aside>
+    </main>
+    <footer>
+      <progress
+        id="progress"
+        hidden="hidden"
+        data-l10n-id="similar-works-progress"
+      ></progress>
+      <span id="stats"></span>
+      <span
+        id="year-legend"
+        hidden="hidden"
+        data-l10n-id="similar-works-graph-years"
+      >
+        <span id="year-old"></span><span id="year-scale"></span
+        ><span id="year-new"></span>
+      </span>
+      <span id="status" role="status"></span>
+    </footer>
+    <script src="graph.js"></script>
+  </body>
+</html>

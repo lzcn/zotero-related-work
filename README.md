@@ -18,7 +18,9 @@ Requires Zotero 10. Download the XPI from the [latest release](https://github.co
 
 Select a paper and expand **Related Work** in the sidebar. Refresh recalculates recommendations; clicking a result opens the paper. Background indexing and changed items update cached results. Recommendations may be incomplete until indexing finishes.
 
-**Suggested tags** combines how well a tag matches the paper with support from similar papers. Existing tags are blue; new tags are purple and marked **New**. New candidates come from repeated topic phrases in the title and abstract. Select tags and click **Add selected tags** to reuse or create them; nothing is added automatically. Tags already present are excluded, and existing tags stay within the same library. Text mode matches topic words; Semantic mode also compares shortlisted tag names with the paper's vector using the same local model. Until that model is ready, tag recommendations use text matching.
+The similarity graph is under development and is currently unavailable.
+
+**Suggested tags** combines how well a tag matches the paper with support from similar papers. Existing tags are blue; new tags are purple and marked **New**. New candidates come from repeated topic phrases in the title and abstract. Select tags and click **Add selected tags** to reuse or create them; nothing is added automatically. Tags already present are excluded, and existing tags stay within the same library. When the local model is ready, tag suggestions also compare shortlisted tag names with the paper's vector. Until then, they use text matching.
 
 Choose **Tools → Tag Manager** to view all tags with their item counts `(n)`. Protected tags are hidden. Select individual tags, Shift-click a range, or use **Select all**. Search and **Possible duplicates** filter the list. Possible duplicates include naming variants, singular/plural forms, reordered words, model-name aliases and close spellings; they remain suggestions until you merge them. Select all selects the filtered results. Cmd/Ctrl+A also works while the list is focused.
 
@@ -26,9 +28,9 @@ Choose **Merge** (the default), **Rename**, or **Delete**. Merge combines select
 
 Tag names use spaces. In Settings, choose **Sentence case** (default) or **Title Case**, and optionally add a leading `#`. Known model names retain their official spelling; existing acronyms, mixed-case names such as `PyTorch`, and hyphenated words such as `co-attention` are preserved. The local dictionary in `data/tag-terms.json` combines model names from Hugging Face Transformers with maintained research terms. It is bundled with the plugin; no lookup sends tag names online. Colored tags are protected by default. Add other names to **Excluded tags**, one per line; their naming variants are protected too.
 
-In **Settings → Related Work**, choose **Text** or **Semantic**. Semantic is currently macOS-only and uses `Xenova/all-MiniLM-L6-v2`, mainly for English papers. Its first use downloads about 90 MB of weights plus tokenizer files from Hugging Face, falling back to hf-mirror.com. It stores one local vector per paper; switching to Text pauses semantic indexing.
+Recommendations automatically combine the existing field-weighted text search with local `Xenova/all-MiniLM-L6-v2` vectors using reciprocal rank fusion (RRF). The model, fusion weights and candidate limits are internal defaults. On macOS, the first use downloads about 90 MB of weights plus tokenizer files from Hugging Face, falling back to hf-mirror.com. The model mainly supports English papers and stores one local vector per paper. Text results remain available while it downloads or indexes, if inference fails, and on other platforms. Fusion ranks are not displayed as similarity percentages.
 
-Background semantic indexing waits for idle time; selecting a paper takes priority. Tokenization runs in a worker; native inference processes one text at a time. On macOS 13.3+, a bundled universal native helper uses ONNX Runtime with Core ML and falls back to native CPU if initialization or inference fails. Apple selects supported hardware; this does not guarantee Neural Engine execution. The helper runs at low priority and is terminated when semantic indexing pauses or Zotero exits. Older semantic vectors are retained on disk but rebuilt under a separate model version.
+Background semantic indexing waits for idle time; selecting a paper takes priority. Tokenization runs in a worker; native inference processes one text at a time. On macOS 13.3+, a bundled universal native helper uses ONNX Runtime with Core ML and falls back to native CPU if initialization or inference fails. Apple selects supported hardware; this does not guarantee Neural Engine execution. The helper runs at low priority and is terminated when semantic indexing pauses or Zotero exits. Cached vectors load in small, cancellable pages so startup can yield to Zotero’s interface.
 
 On macOS, Tag Manager uses Command-A/F/W for select all, search and close. Search waits for IME composition and briefly coalesces typing updates. Reduced-motion settings disable interface transitions.
 
@@ -37,6 +39,12 @@ Settings also show the current build, text index, semantic vector counts and liv
 ## Data and backup
 
 The rebuildable index is in `related-work/similarity.sqlite` under the Zotero data directory. Progress is recorded in `related-work/index-status.json`. On first startup after the rename, the entire legacy `similar-works/` cache moves to `related-work/` before opening SQLite, including models and progress. If both directories exist, startup reports the conflict without overwriting either. The plugin does not modify Zotero's original full-text database.
+
+The hybrid-ranking update keeps the current MiniLM model, 384-dimensional vector format and database schema. Valid cached vectors and model files are reused; only missing or changed papers need encoding. Recommendation rankings are recalculated separately as needed, without a full-library rebuild.
+
+On upgrade, one SQLite transaction clears old recommendation ranks, retired quantized-model vectors, stale embeddings and orphan cache rows, then records completion. Failure or interruption rolls back the transaction for retry. Startup also removes the retired `minilm-l6-q8-v1` model, previous native runtime directories and recognized interrupted-download files before inference starts. Current model weights, valid vectors, Core ML compilation caches and recovery backups are preserved. Unrecognized files and directories outside the retired cache directories are left in place. Cleanup does not run a full database compaction during startup.
+
+Obsolete algorithm and tag-format preferences are removed after carrying the old Title Case choice into the current naming setting. Existing tags are not renamed. File cleanup is repeatable, skips symlinked cache trees and finishes its current operation before shutdown.
 
 ## Development
 
@@ -47,9 +55,11 @@ Use Node.js 22.13+ (22.x) or 24+. Run `npm ci`, then `npm run check`.
 - `npm run check`: formatting, lint, tests and type checking; reuse valid XPI output.
 - `npm run release`: full checks, then prepare the XPI, `SHA256SUMS` and `updates.json` under `release/v<version>/`.
 
-`npm run test:host` verifies packaged startup, localization and cleanup with temporary profile and data directories. Set `ZOTERO_BINARY` to select another host executable.
+`npm run test:host` verifies packaged startup, localization and cleanup with temporary profile and data directories. Set `ZOTERO_BINARY` to select another host executable. Set `SW_HOST_NATIVE_MODEL_DIR` to a local directory containing `model.onnx` and tokenizer files to test native hybrid retrieval and shutdown; the test copies them into its temporary data directory.
 
 macOS builds require Xcode Command Line Tools. The first build downloads a pinned, SHA-256-verified ONNX Runtime SDK. Run `SW_NATIVE_MODEL_DIR=/path/to/local/model npm run test:native` to compare Core ML and CPU outputs using local `model.onnx` and tokenizer files.
+
+The offline `scripts/benchmark-retrieval.py` and `scripts/benchmark-retrieval.mjs` compare paper embeddings, lexical search and RRF against separately annotated judgments. Private corpus snapshots, pinned model revisions, frozen judgments, timings and results stay under the ignored `build/retrieval-benchmark/` directory; none are packaged.
 
 Build output: `dist/zotero-related-work.xpi`. Install and verify changes in Zotero. Release preparation does not create a tag or upload files. Shared working rules live in the plugin workspace's root `AGENTS.md`.
 

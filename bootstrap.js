@@ -23,6 +23,7 @@ function stopWork() {
   SWReady = false;
   ++SWGeneration;
   SWScope.SWTags?.stop();
+  SWScope.SWGraph?.stop();
   SWScope.SWSection?.shutdown();
   SWScope.SWSemantic?.stop();
   SWScope.SWIndexer?.requestStop?.();
@@ -63,7 +64,9 @@ async function start({ id, version, rootURI }, token) {
       "corpus.js",
       "indexer.js",
       "semantic.js",
+      "migration.js",
       "tags.js",
+      "graph.js",
       "section.js",
     ];
     for (var file of files)
@@ -87,9 +90,8 @@ async function start({ id, version, rootURI }, token) {
       [["content", "similar-works", rootURI + "content/"]],
     );
     await SWScope.SWTags.loadTerms(rootURI);
-    const namingStyle = Zotero.Prefs.get("similar-works.tagNameStyle");
-    if (!["sentence", "title"].includes(namingStyle))
-      Zotero.Prefs.set("similar-works.tagNameStyle", "sentence");
+    if (token !== SWGeneration) return;
+    SWScope.SWMigration.preferences();
     await migrateDataDirectory();
     if (token !== SWGeneration) return;
     await SWScope.SWIndexer.start();
@@ -120,6 +122,7 @@ async function releaseResources() {
     removeQuitObserver();
     SWScope.SWSemantic?.stop();
     await SWScope.SWSemantic?._running;
+    await SWScope.SWSemantic?._loaded;
     if (SWScope.SWSection) SWScope.SWSection.shutdown();
     if (SWScope.SWIndexer) await SWScope.SWIndexer.shutdown();
     if (SWScope.SWIndexer?.corpus) await SWScope.SWIndexer.corpus.close();
@@ -136,6 +139,7 @@ async function shutdown(data, reason) {
   if (typeof APP_SHUTDOWN !== "undefined" && reason === APP_SHUTDOWN) {
     try {
       await SWScope.SWTags?.finishWrites();
+      await SWScope.SWSemantic?._loaded;
       await SWScope.SWIndexer?.corpus?.close();
     } finally {
       releaseChrome();

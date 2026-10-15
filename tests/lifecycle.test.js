@@ -64,6 +64,7 @@ function fixture({
             stop: () => {},
             finishWrites: async () => {},
           };
+          scope.SWMigration = { preferences() {} };
           scope.SWIndexer = {
             corpus,
             start: async () => state.starts++,
@@ -93,8 +94,8 @@ function fixture({
 test("repeated startup and shutdown register and close once", async () => {
   const h = fixture();
   await Promise.all([h.context.startup(h.data), h.context.startup(h.data)]);
-  assert.equal(h.state.loads.length, 8);
-  assert.equal(new Set(h.state.loads).size, 8);
+  assert.equal(h.state.loads.length, 10);
+  assert.equal(new Set(h.state.loads).size, 10);
   assert.ok(h.state.loads.some((uri) => uri.endsWith("search.js")));
   assert.equal(h.state.starts, 1);
   assert.equal(h.state.registered, 1);
@@ -180,4 +181,25 @@ test("cache directory migration moves the complete folder once and refuses to ov
     /neither was overwritten/,
   );
   assert.equal(moves.length, 1);
+});
+
+test("shutdown waits for owned cache migration before closing storage", async () => {
+  for (const reason of [undefined, 2]) {
+    const h = fixture();
+    await h.context.startup(h.data);
+    let finish;
+    h.context.APP_SHUTDOWN = 2;
+    h.context.SWScope.SWSemantic = {
+      stop() {},
+      _loaded: new Promise((resolve) => {
+        finish = resolve;
+      }),
+    };
+    const stopping = h.context.shutdown(h.data, reason);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(h.state.closed, 0);
+    finish();
+    await stopping;
+    assert.equal(h.state.closed, 1);
+  }
 });

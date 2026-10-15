@@ -60,8 +60,10 @@ var SWCorpus = class {
       if (this._stopped) return;
       await this._db.execute("PRAGMA journal_mode = WAL");
       await this._ensureSchema();
+      await this._migrateRetrievalCache();
       await this._loadAll();
     } catch (e) {
+      if (this._stopped) return;
       Zotero.logError(
         new Error("[similar-works] corpus init failed: " + String(e)),
       );
@@ -153,6 +155,35 @@ var SWCorpus = class {
         SW_SCHEMA_VERSION +
         "')",
     );
+  }
+
+  async _migrateRetrievalCache() {
+    if (this._stopped) return;
+    const rows = await this._db.execute(
+      "SELECT v FROM meta WHERE k = 'retrievalCacheVersion'",
+    );
+    const previous = rows.length ? Number(rows[0].getResultByName("v")) : 0;
+    if (!Number.isInteger(previous) || previous < 0)
+      throw new Error("Invalid retrieval cache migration version");
+    if (previous >= 1) return;
+    // Keep the vector/schema versions. Only disposable ranks and unusable rows
+    // are retired, atomically with the marker so an interrupted upgrade retries.
+    await this._db.executeTransaction(async () => {
+      const statements = [
+        "DELETE FROM recommendations",
+        "DELETE FROM embeddings WHERE model = 'minilm-l6-q8-v1' OR NOT EXISTS (SELECT 1 FROM docs WHERE docs.key = embeddings.key AND docs.hash = embeddings.sourceHash)",
+        ...["fingerprints", "doc_updates", "source_updates"].map(
+          (table) =>
+            `DELETE FROM ${table} WHERE NOT EXISTS (SELECT 1 FROM docs WHERE docs.key = ${table}.key)`,
+        ),
+        "INSERT OR REPLACE INTO meta (k, v) VALUES ('retrievalCacheVersion', '1')",
+      ];
+      for (const sql of statements) {
+        if (this._stopped) throw new Error("Cache migration cancelled");
+        await this._db.execute(sql);
+      }
+      if (this._stopped) throw new Error("Cache migration cancelled");
+    });
   }
 
   async _loadAll() {

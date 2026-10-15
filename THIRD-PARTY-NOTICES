@@ -11,6 +11,11 @@ upstream implementation; the project's AGPL license does not replace it.
 Build tools are development dependencies and are not bundled in the add-on.
 Their respective license notices are included in their npm packages.
 
+The graph layout adapts the Knowledge Base plugin's force layout and Worker
+batches (Zhi Lu, AGPL-3.0-or-later). It bundles d3-force, d3-dispatch,
+d3-quadtree and d3-timer (ISC); their license copies are under runtime/.
+Source: https://github.com/d3/d3-force
+
 The add-on bundles Transformers.js (Apache-2.0), ONNX Runtime Web (MIT),
 and Hugging Face Jinja (MIT). License copies are included under runtime/.
 Source: https://huggingface.co/docs/transformers.js

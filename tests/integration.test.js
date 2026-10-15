@@ -90,7 +90,12 @@ function harness() {
     },
   };
   const Zotero = {
-    Prefs: { get: (k) => prefs.get(k), set: (k, v) => prefs.set(k, v) },
+    Prefs: {
+      get: (k) => prefs.get(k),
+      set: (k, v) => prefs.set(k, v),
+      prefHasUserValue: (k) => prefs.has(k),
+      clear: (k) => prefs.delete(k),
+    },
     Promise: { delay: async () => {} },
     logError: (e) => errors.push(e),
     Items: {
@@ -683,6 +688,7 @@ test("bootstrap loads scripts into a scope with Zotero globals and closes SQLite
             removeBlocker: (blocker) => blockers.delete(blocker),
           },
           openConnection: async () => ({
+            executeTransaction: async (work) => work(),
             execute: async (sql) =>
               sql.includes("COUNT(*)") ? [{ getResultByName: () => 0 }] : [],
             close: async () => {
@@ -993,14 +999,13 @@ test("Zotero integer preference loading does not truncate the similarity thresho
   assert.equal(rows.length, 0);
 });
 
-test("method preference keeps Text and Semantic separate without sidebar controls", async () => {
+test("hybrid is an internal default and ignores obsolete algorithm preferences", async () => {
   const h = harness();
   h.context.Zotero.isMac = true;
   const item = h.item(1, "hashing");
   await h.SWIndexer.processItem(item);
   await h.SWIndexer.processItem(h.item(2, "binary codes"));
-  let paused = 0,
-    enabled = 0;
+  let enabled = 0;
   h.context.SWSemantic = {
     _enabled: false,
     status: { state: "idle" },
@@ -1010,26 +1015,24 @@ test("method preference keeps Text and Semantic separate without sidebar control
       this._enabled = true;
       enabled++;
     },
-    pause() {
-      this._enabled = false;
-      paused++;
-    },
     enqueue() {},
     getRecommendations: () => null,
     recommendationsFresh: () => false,
     saveRecommendations() {},
-    search: async () => [{ key: "1/KEY2", score: 0.7, weak: false }],
+    recommend: async () => ({
+      matches: [{ key: "1/KEY2", score: 0.7, weak: false }],
+    }),
   };
-  // Text and dense scores must never share a threshold.
+  // Old cosine/text thresholds must not remove fused ranks.
   h.prefs.set("similar-works.minimumSimilarity", "0.8");
   h.prefs.set("similar-works.recommendationMethod", "semantic");
   await h.SWSection.renderBody({ body: h.body, item }, true);
   assert.equal(enabled, 1);
   assert.equal(h.body.querySelectorAll(".sw-row").length, 1);
   assert.equal(h.body.querySelector("select"), null);
+  assert.equal(h.body.querySelector(".sw-num").textContent, "");
   h.prefs.set("similar-works.recommendationMethod", "text");
-  await h.SWSection.onMethodChanged();
-  await h.body._swWork;
-  assert.equal(paused, 1);
-  assert.equal(h.body.querySelectorAll(".sw-row").length, 0);
+  await h.SWSection.renderBody({ body: h.body, item }, true);
+  assert.equal(enabled, 1);
+  assert.equal(h.body.querySelectorAll(".sw-row").length, 1);
 });

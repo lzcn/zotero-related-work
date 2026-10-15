@@ -55,7 +55,6 @@ var SWSection = {
   _tagMenus: new Map(),
   _tagObserver: null,
   _tagTimer: null,
-  _prefObserver: null,
   _preferencePane: null,
 
   register(rootURI) {
@@ -130,12 +129,6 @@ var SWSection = {
       },
       ["item-tag", "tag"],
       "similar-works-tags",
-    );
-    this._prefObserver = Zotero.Prefs.registerObserver?.(
-      "similar-works.recommendationMethod",
-      () => {
-        void this.onMethodChanged().catch((error) => Zotero.logError(error));
-      },
     );
     if (Zotero.PreferencePanes?.register)
       void Zotero.PreferencePanes.register({
@@ -343,13 +336,13 @@ var SWSection = {
     var target = await SWIndexer.resolveDocItem(item);
     if (!target || body._swToken !== token || this._stopped) return;
     var docKey = SWIndexer.docKey(target);
-    const method = SWPref("recommendationMethod", "text");
+    const method = Zotero.isMac ? "hybrid" : "text";
     if (body._swMethod !== method) {
       body._swMethod = method;
       this.setStatus(body, "");
     }
-    if (method === "semantic") {
-      await this._renderSemantic(props, target, docKey, token, compute);
+    if (method === "hybrid") {
+      await this._renderHybrid(props, target, docKey, token, compute);
       return;
     }
     var includeWeak = SWPref("allowMetadataOnlyRecommendations", true);
@@ -467,37 +460,14 @@ var SWSection = {
     await this._presentMatches(props, matches, docKey, token);
   },
 
-  async onMethodChanged() {
-    if (this._stopped) return;
-    const method = SWPref("recommendationMethod", "text");
-    if (typeof SWSemantic !== "undefined") {
-      if (method === "text") SWSemantic.pause();
-      else {
-        await SWSemantic.start(SWIndexer.corpus);
-        if (
-          this._stopped ||
-          SWPref("recommendationMethod", "text") !== "semantic"
-        )
-          return;
-        SWSemantic.enable();
-      }
-    }
-    for (const props of [...this._active]) void this.renderBody(props, true);
-  },
-
   refreshSemantic() {
-    if (this._stopped || SWPref("recommendationMethod", "text") !== "semantic")
-      return;
+    if (this._stopped || !Zotero.isMac) return;
     for (const props of [...this._active])
       if (props.body.isConnected) void this.renderBody(props);
   },
 
-  async _renderSemantic(props, target, key, token, compute) {
+  async _renderHybrid(props, target, key, token, compute) {
     const body = props.body;
-    if (typeof SWSemantic === "undefined" || !Zotero.isMac) {
-      this.setStatus(body, "Semantic recommendations currently require macOS");
-      return;
-    }
     await SWSemantic.start(SWIndexer.corpus);
     if (body._swToken !== token || this._stopped) return;
     if (
@@ -510,51 +480,35 @@ var SWSection = {
       ? null
       : SWSemantic.getRecommendations(key, includeWeak);
     if (cached && !cached.dirty) {
-      await this._presentMatches(
-        props,
-        cached.matches.filter((m) => m.score >= 0.35),
-        key,
-        token,
-      );
+      await this._presentMatches(props, cached.matches, key, token);
       if (body._swToken !== token || this._stopped) return;
       if (SWSemantic.recommendationsFresh(cached, key)) return;
     }
-    await SWIndexer.ensureForDisplay(target);
+    if (compute) await SWIndexer.ensureNow(target);
+    else await SWIndexer.ensureForDisplay(target);
     if (body._swToken !== token || this._stopped) return;
     SWSemantic.enqueue(key, true);
-    const matches = await SWSemantic.search(
+    const result = await SWSemantic.recommend(
       key,
       50,
       (candidate, doc) =>
         candidate.startsWith(target.libraryID + "/") &&
         (includeWeak || !doc.weak),
-      () => this._stopped || body._swToken !== token,
+      () =>
+        this._stopped ||
+        body._swToken !== token ||
+        body.closest?.("collapsible-section")?.open === false,
     );
     if (body._swToken !== token || this._stopped) return;
-    if (
-      matches === null ||
-      (!matches.length && SWSemantic.status.state !== "idle")
-    ) {
-      const fallback =
-        SWSemantic.unavailable?.get(key) ===
-        SWIndexer.corpus.docs.get(key)?.hash
-          ? "No analyzable text for Semantic"
-          : SWSemantic.status.state === "error"
-            ? "Semantic unavailable: " + SWSemantic.status.error
-            : "Preparing semantic recommendations…";
-      this.setStatus(body, fallback);
-      return;
-    }
-    await SWSemantic.saveRecommendations(key, includeWeak, matches);
-    if (body._swToken !== token || this._stopped) return;
-    // Dense and text scores have different distributions; never reuse the
-    // text threshold or cached scores for this method.
-    await this._presentMatches(
-      props,
-      matches.filter((m) => m.score >= 0.35),
+    if (!result) return;
+    SWSemantic.saveRecommendations(
       key,
-      token,
+      includeWeak,
+      result.matches,
+      result.snapshot,
     );
+    if (body._swToken !== token || this._stopped) return;
+    await this._presentMatches(props, result.matches, key, token);
   },
 
   async _presentMatches(
@@ -657,7 +611,8 @@ var SWSection = {
       side.className = "sw-side";
       var num = doc.createElementNS("http://www.w3.org/1999/xhtml", "div");
       num.className = "sw-num";
-      num.textContent = (r.score * 100).toFixed(1) + "%";
+      num.textContent =
+        body._swMethod === "hybrid" ? "" : (r.score * 100).toFixed(1) + "%";
       var track = doc.createElementNS("http://www.w3.org/1999/xhtml", "div");
       track.className = "sw-track";
       var bar = doc.createElementNS("http://www.w3.org/1999/xhtml", "div");
@@ -861,7 +816,7 @@ var SWSection = {
   async _resolveRows(matches, k, method = "text") {
     var out = [];
     const configuredMinimum =
-      method === "semantic" ? 0.35 : Number(SWPref("minimumSimilarity", 0.05));
+      method === "hybrid" ? 0 : Number(SWPref("minimumSimilarity", 0.05));
     const minimum =
       Number.isFinite(configuredMinimum) &&
       configuredMinimum >= 0 &&
@@ -982,8 +937,6 @@ var SWSection = {
     if (this._tagObserver)
       Zotero.Notifier.unregisterObserver(this._tagObserver);
     this._tagObserver = null;
-    if (this._prefObserver) Zotero.Prefs.unregisterObserver(this._prefObserver);
-    this._prefObserver = null;
     if (this._preferencePane)
       Zotero.PreferencePanes.unregister(this._preferencePane);
     this._preferencePane = null;

@@ -28,6 +28,8 @@ function fixture() {
   const semantic = context.SWSemantic;
   semantic.corpus = {
     docs: new Map(),
+    revision: 0,
+    search: { epoch: 1 },
     progress: { phase: "ready" },
     ready: Promise.resolve(),
     runTask: async (work) => work(),
@@ -74,18 +76,98 @@ test("native SQLite byte arrays and unaligned views retain cached embeddings", a
     semantic.decode(bytes),
   );
   semantic.corpus.docs.set("1/A", { hash: "unchanged" });
-  semantic.corpus._db.execute = async () => [
-    {
-      getResultByName: (name) =>
-        ({ key: "1/A", sourceHash: "unchanged", vector: nativeBytes })[name],
-    },
-  ];
+  semantic.corpus._db.execute = async (_sql, params) =>
+    params[1]
+      ? []
+      : [
+          {
+            getResultByName: (name) =>
+              ({ key: "1/A", sourceHash: "unchanged", vector: nativeBytes })[
+                name
+              ],
+          },
+        ];
   await semantic.start(semantic.corpus);
   assert.equal(semantic.status.indexedItems, 1);
+  assert.ok(semantic._startupTimer);
   semantic.enable();
+  assert.equal(semantic._startupTimer, null);
   assert.equal(semantic._queue.length, 0);
   assert.equal(semantic._running, null);
   assert.equal((await semantic.search("1/A", 20)).length, 0);
+  semantic.stop();
+});
+
+test("existing vectors load in bounded pages without re-encoding or writing old caches", async () => {
+  const { semantic, context } = fixture();
+  const nativeBytes = Array.from(
+    semantic.encode(semantic.normalize(new Float32Array(384).fill(1))),
+  );
+  const rows = Array.from({ length: 235 }, (_, i) => ({
+    key: `1/${String(i).padStart(4, "0")}`,
+    sourceHash: "unchanged",
+    vector: nativeBytes,
+  }));
+  rows.forEach((row) =>
+    semantic.corpus.docs.set(row.key, { hash: row.sourceHash }),
+  );
+  rows[12].sourceHash = "stale";
+  let reads = 0,
+    yields = 0,
+    elapsed = 0;
+  context.Date = { now: () => elapsed };
+  context.swYield = async () => {
+    yields++;
+  };
+  const decode = semantic.decode.bind(semantic);
+  semantic.decode = (bytes) => {
+    // Force a realistic long decode slice without a wall-clock-dependent test.
+    elapsed += 7;
+    return decode(bytes);
+  };
+  semantic.corpus._db.execute = async (sql, params) => {
+    assert.match(sql, /^SELECT /);
+    assert.equal(params[0], "minilm-l6-fp32-v2");
+    reads++;
+    return rows
+      .filter((row) => row.key > params[1])
+      .slice(0, 100)
+      .map((row) => ({ getResultByName: (name) => row[name] }));
+  };
+  await semantic.start(semantic.corpus);
+  assert.equal(reads, 4);
+  assert.equal(semantic.vectors.size, 234);
+  assert.ok(!semantic.vectors.has(rows[12].key));
+  assert.ok(yields > 0);
+  semantic.corpus.docs.delete(rows[12].key);
+  semantic._pump = () => assert.fail("Unchanged vectors must not be rebuilt");
+  semantic.enable();
+  assert.equal(semantic._queue.length, 0);
+  semantic.stop();
+});
+
+test("shutdown during cached-vector loading stops before the next page", async () => {
+  const { semantic } = fixture();
+  const bytes = semantic.encode(
+    semantic.normalize(new Float32Array(384).fill(1)),
+  );
+  let reads = 0;
+  semantic.corpus.docs.set("1/A", { hash: "a" });
+  semantic.corpus._db.execute = async () => {
+    reads++;
+    semantic.stop();
+    return [
+      {
+        getResultByName: (name) =>
+          ({ key: "1/A", sourceHash: "a", vector: bytes })[name],
+      },
+    ];
+  };
+  await semantic.start(semantic.corpus);
+  assert.equal(reads, 1);
+  assert.equal(semantic.vectors.size, 0);
+  assert.equal(semantic._startupTimer, null);
+  assert.equal(semantic.status.state, "stopped");
 });
 test("semantic Top-K uses valid same-library vectors and respects cancellation", async () => {
   const { semantic, put } = fixture();
@@ -170,7 +252,7 @@ test("input chunking stays bounded and removes reference sections", () => {
   assert.ok(chunks.every((s) => s.length <= 1800 && !s.includes("Smith")));
 });
 
-test("semantic Top-K cache updates incrementally and invalidates on removal", () => {
+test("hybrid caches invalidate on vector, lexical epoch and corpus changes", () => {
   const { semantic, put } = fixture();
   put("1/Q", "q", [1, 0]);
   put("1/A", "a", [1, 0]);
@@ -180,20 +262,57 @@ test("semantic Top-K cache updates incrementally and invalidates on removal", ()
   const cached = semantic.getRecommendations("1/Q", true);
   assert.ok(cached);
   assert.ok(semantic.recommendationsFresh(cached, "1/Q"));
-  // A newly built vector is inserted without rescanning the whole corpus.
+  // Changing one dense rank invalidates fusion; cosine must not patch RRF scores.
   put("1/B", "b", [0.8, 0.6]);
   semantic._applyVectorChange("1/B");
   assert.deepEqual(
     cached.matches.map((m) => m.key),
-    ["1/A", "1/B"],
+    ["1/A"],
   );
-  // Deleting a present match frees a slot that cannot be refilled in place.
+  assert.ok(!semantic.recommendationsFresh(cached, "1/Q"));
+  semantic.saveRecommendations("1/Q", true, cached.matches);
+  let fresh = semantic.getRecommendations("1/Q", true);
+  assert.ok(semantic.recommendationsFresh(fresh, "1/Q"));
+  semantic.corpus.search.epoch++;
+  assert.ok(!semantic.recommendationsFresh(fresh, "1/Q"));
+  semantic.saveRecommendations("1/Q", true, fresh.matches);
+  fresh = semantic.getRecommendations("1/Q", true);
+  semantic.corpus.revision++;
+  assert.ok(!semantic.recommendationsFresh(fresh, "1/Q"));
   semantic.forget("1/A");
-  assert.ok(!cached.matches.some((m) => m.key === "1/A"));
   assert.equal(cached.dirty, true);
   assert.ok(!semantic.recommendationsFresh(cached, "1/Q"));
   // A changed query vector drops its own cached ranking.
   semantic._applyVectorChange("1/Q");
+  assert.equal(semantic.getRecommendations("1/Q", true), null);
+});
+
+test("hybrid retrieval fuses ranks, falls back before embeddings and rejects stale work", async () => {
+  const { semantic, put } = fixture();
+  put("1/Q", "q", [1, 0]);
+  put("1/A", "a", [0.8, 0.6]);
+  put("1/B", "b", [1, 0]);
+  const lexical = [
+    { key: "1/A", score: 0.3 },
+    { key: "1/C", score: 0.2 },
+  ];
+  semantic.corpus.search.search = async (_key, k) => {
+    assert.equal(k, 100);
+    return lexical;
+  };
+  let result = await semantic.recommend("1/Q", 10);
+  assert.equal(result.matches[0].key, "1/A");
+  assert.equal(result.matches.length, 3);
+  semantic.vectors.delete("1/Q");
+  result = await semantic.recommend("1/Q", 10);
+  assert.deepEqual(result.matches, lexical);
+  semantic.corpus.search.search = async () => {
+    semantic.corpus.revision++;
+    return lexical;
+  };
+  assert.equal(await semantic.recommend("1/Q", 10), null);
+  assert.equal(await semantic.recommend("1/Q", 10, null, () => true), null);
+  semantic.saveRecommendations("1/Q", true, lexical, result.snapshot);
   assert.equal(semantic.getRecommendations("1/Q", true), null);
 });
 

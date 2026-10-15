@@ -25,6 +25,7 @@ var SWSemantic = {
   _pending: new Map(),
   _sequence: 0,
   _generation: 0,
+  _vectorRevision: 0,
   _queue: [],
   _queued: new Set(),
   _priority: new Set(),
@@ -49,39 +50,57 @@ var SWSemantic = {
     this.corpus = corpus;
     await corpus.ready;
     if (this._stopped || corpus.progress.phase !== "ready") return;
-    const rows =
-      (await corpus._db?.execute(
-        "SELECT key, sourceHash, vector FROM embeddings WHERE model = ?",
-        [this.version],
-      )) || [];
-    for (const row of rows) {
-      const key = row.getResultByName("key"),
-        hash = row.getResultByName("sourceHash");
-      if (corpus.docs.get(key)?.hash !== hash) continue;
-      try {
-        this.vectors.set(key, {
-          hash,
-          vector: this.decode(row.getResultByName("vector")),
-        });
-      } catch (error) {
-        Zotero.logError(error);
+    if (typeof SWMigration !== "undefined")
+      await SWMigration.files(() => !this._stopped).catch((error) =>
+        Zotero.logError(error),
+      );
+    if (this._stopped) return;
+    let afterKey = "",
+      sliceStarted = Date.now();
+    // Keep existing model vectors intact. Keyset pages bound startup memory
+    // and let selection, cancellation and shutdown run between decoding slices.
+    while (!this._stopped) {
+      const rows =
+        (await corpus._db?.execute(
+          "SELECT key, sourceHash, vector FROM embeddings WHERE model = ? AND key > ? ORDER BY key LIMIT 100",
+          [this.version, afterKey],
+        )) || [];
+      if (!rows.length) break;
+      for (const row of rows) {
+        if (this._stopped) return;
+        const key = row.getResultByName("key"),
+          hash = row.getResultByName("sourceHash");
+        afterKey = key;
+        if (corpus.docs.get(key)?.hash !== hash) continue;
+        try {
+          this.vectors.set(key, {
+            hash,
+            vector: this.decode(row.getResultByName("vector")),
+          });
+        } catch (error) {
+          Zotero.logError(error);
+        }
+        if (Date.now() - sliceStarted >= 6) {
+          await swYield(0);
+          sliceStarted = Date.now();
+        }
       }
+      this.status.indexedItems = this.vectors.size;
     }
+    if (this._stopped) return;
     this.status.indexedItems = this.vectors.size;
-    if (SWPref("recommendationMethod", "text") === "semantic") {
+    if (Zotero.isMac && !this._enabled && !this._startupTimer) {
       this._startupTimer = setTimeout(() => {
         this._startupTimer = null;
-        if (
-          !this._stopped &&
-          SWPref("recommendationMethod", "text") === "semantic"
-        )
-          this.enable();
+        if (!this._stopped) this.enable();
       }, 30000);
     }
   },
 
   enable() {
     if (this._stopped) return;
+    clearTimeout(this._startupTimer);
+    this._startupTimer = null;
     this._enabled = true;
     this.status.error = null;
     this.status.state = "waiting";
@@ -92,6 +111,8 @@ var SWSemantic = {
   },
 
   pause() {
+    clearTimeout(this._startupTimer);
+    this._startupTimer = null;
     this._idleWait?.();
     this._generation++;
     this._enabled = false;
@@ -449,13 +470,54 @@ var SWSemantic = {
       .sort((a, b) => b.score - a.score || a.key.localeCompare(b.key));
   },
 
-  // Cosine is pairwise and independent of the rest of the corpus, so a cached
-  // Top-K stays valid when vectors are added and only needs a targeted refresh
-  // for the one vector that changed. 50 results are stored to absorb churn.
   dot(a, b) {
     let score = 0;
     for (let i = 0; i < this.dimensions; i++) score += a[i] * b[i];
     return score;
+  },
+
+  snapshot(key) {
+    return {
+      queryHash: this.corpus.docs.get(key)?.hash,
+      revision: this.corpus.revision,
+      epoch: this.corpus.search.epoch,
+      vectorRevision: this._vectorRevision,
+      generation: this._generation,
+    };
+  },
+
+  async recommend(key, k, filter, cancelled = () => false) {
+    return this.corpus.runTask(async () => {
+      const snapshot = this.snapshot(key);
+      const active = () => {
+        const current = this.snapshot(key);
+        return (
+          !this._stopped &&
+          !cancelled() &&
+          Object.entries(snapshot).every(
+            ([name, value]) => current[name] === value,
+          )
+        );
+      };
+      if (!snapshot.queryHash || !active()) return null;
+      const lexical = await this.corpus.search.search(
+        key,
+        100,
+        filter,
+        () => !active(),
+        () => swYield(0),
+        () => {},
+      );
+      if (!active()) return null;
+      const dense = await this.search(key, 100, filter, () => !active());
+      if (!active()) return null;
+      return {
+        matches: dense
+          ? SWSearch.fuse([lexical, dense], k)
+          : lexical.slice(0, k),
+        snapshot,
+      };
+    }, 1);
   },
 
   getRecommendations(key, includeWeak) {
@@ -468,25 +530,37 @@ var SWSemantic = {
   },
 
   recommendationsFresh(cached, key) {
-    const vector = this.vectors.get(key);
+    const snapshot = this.snapshot(key);
     return (
       !!cached &&
       !cached.dirty &&
-      !!vector &&
-      cached.queryHash === vector.hash &&
-      this.corpus.docs.get(key)?.hash === vector.hash &&
+      !!snapshot.queryHash &&
+      Object.entries(snapshot).every(
+        ([name, value]) => cached[name] === value,
+      ) &&
       Date.now() - cached.computedAt < 24 * 60 * 60 * 1000
     );
   },
 
-  saveRecommendations(key, includeWeak, matches) {
-    const vector = this.vectors.get(key);
-    if (!vector || this.corpus.docs.get(key)?.hash !== vector.hash) return;
+  saveRecommendations(
+    key,
+    includeWeak,
+    matches,
+    snapshot = this.snapshot(key),
+  ) {
+    if (
+      this._stopped ||
+      !snapshot.queryHash ||
+      !Object.entries(snapshot).every(
+        ([name, value]) => this.snapshot(key)[name] === value,
+      )
+    )
+      return;
     const cacheKey = JSON.stringify([key, includeWeak]);
     this._recommendations.set(cacheKey, {
       queryKey: key,
       includeWeak,
-      queryHash: vector.hash,
+      ...snapshot,
       matches: matches.slice(0, 50),
       computedAt: Date.now(),
       dirty: false,
@@ -502,8 +576,8 @@ var SWSemantic = {
   },
 
   _applyVectorChange(key) {
+    this._vectorRevision++;
     if (!this._recommendations.size) return;
-    const vector = this.vectors.get(key)?.vector || null;
     const slash = key.indexOf("/"),
       library = key.slice(0, slash);
     for (const [cacheKey, cached] of [...this._recommendations]) {
@@ -514,28 +588,9 @@ var SWSemantic = {
       }
       const querySlash = cached.queryKey.indexOf("/");
       if (cached.queryKey.slice(0, querySlash) !== library) continue;
-      const query = this.vectors.get(cached.queryKey);
-      if (!query || cached.queryHash !== query.hash) continue;
-      const index = cached.matches.findIndex((m) => m.key === key);
-      if (index >= 0) cached.matches.splice(index, 1);
-      let refilled = false;
-      if (vector) {
-        const source = this.corpus.docs.get(key);
-        if (cached.includeWeak || !source?.weak) {
-          const score = Math.min(1, this.dot(query.vector, vector));
-          if (score > 0) {
-            cached.matches.push({ key, score, weak: !!source?.weak });
-            refilled = true;
-          }
-        }
-        cached.matches.sort(
-          (a, b) => b.score - a.score || a.key.localeCompare(b.key),
-        );
-        cached.matches = cached.matches.slice(0, 50);
-      }
-      // The entry left the list without a replacement (deleted, or its score
-      // dropped out): the next best neighbor is unknown, so recompute lazily.
-      if (index >= 0 && !refilled) cached.dirty = true;
+      // A changed dense rank can move every fused result. Recompute lazily;
+      // a cosine score must never be patched into a reciprocal-rank cache.
+      cached.dirty = true;
     }
   },
 

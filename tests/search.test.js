@@ -12,6 +12,30 @@ const { SWCorpus } = require("../src/corpus.js");
 const noPause = async () => {};
 const noCancel = () => false;
 
+test("RRF uses fixed ranks rather than incompatible score scales", () => {
+  const lexical = [
+    { key: "1/A", score: 1000, weak: true },
+    { key: "1/B", score: 10, weak: true },
+  ];
+  const dense = [
+    { key: "1/C", score: 0.99 },
+    { key: "1/B", score: 0.01, weak: true },
+  ];
+  const result = SWSearch.fuse([lexical, dense]);
+  assert.equal(result[0].key, "1/B");
+  assert.ok(Math.abs(result[0].score - 61 / 62) < 1e-12);
+  assert.equal(result[0].weak, true);
+  assert.deepEqual(
+    SWSearch.fuse([
+      lexical.map((m) => ({ ...m, score: m.score / 1e6 })),
+      dense,
+    ]),
+    result,
+  );
+  assert.deepEqual(SWSearch.fuse([]), []);
+  assert.equal(SWSearch.fuse([lexical, dense], 1).length, 1);
+});
+
 test("field counts preserve boundaries and reject truncated storage", async () => {
   const counts = await SWSearch.extract({
     title: "traffic",

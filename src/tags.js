@@ -324,8 +324,7 @@ var SWTags = {
     if (
       typeof SWSemantic !== "undefined" &&
       typeof SWSemantic.tagSimilarity === "function" &&
-      typeof SWPref !== "undefined" &&
-      SWPref("recommendationMethod", "text") === "semantic"
+      SWSemantic._enabled
     ) {
       let scores;
       try {

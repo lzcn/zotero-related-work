@@ -2,7 +2,13 @@ import js from "@eslint/js";
 
 export default [
   {
-    ignores: ["node_modules/**", "dist/**", "release/**", ".local-backups/**"],
+    ignores: [
+      "node_modules/**",
+      "build/**",
+      "dist/**",
+      "release/**",
+      ".local-backups/**",
+    ],
   },
   js.configs.recommended,
   {
@@ -37,6 +43,7 @@ export default [
           "TextEncoder",
           "Ci",
           "SWSemantic",
+          "SWMigration",
           "setTimeout",
           "clearTimeout",
           "pref",
@@ -47,6 +54,7 @@ export default [
           "SWTokenizer",
           "SWSection",
           "SWTags",
+          "SWGraph",
           "SWPlugin",
           "SWPref",
           "SWResultLimit",
@@ -84,7 +92,11 @@ export default [
     files: ["ml/**/*.js"],
     languageOptions: {
       sourceType: "module",
-      globals: { self: "readonly", Response: "readonly" },
+      globals: {
+        self: "readonly",
+        Response: "readonly",
+        performance: "readonly",
+      },
     },
   },
   {

@@ -98,6 +98,23 @@ const worker = await build({
   alias: { "onnxruntime-web": "onnxruntime-web/wasm" },
 });
 files["runtime/worker.js"] = worker.outputFiles[0].contents;
+for (const name of ["graph-worker", "graph-layout-worker"]) {
+  const bundle = await build({
+    entryPoints: [join(root, "ml", name + ".js")],
+    bundle: true,
+    write: false,
+    platform: "browser",
+    format: "iife",
+    target: "firefox140",
+    minify: true,
+    legalComments: "inline",
+  });
+  files[`content/${name}.js`] = bundle.outputFiles[0].contents;
+}
+for (const name of ["d3-force", "d3-dispatch", "d3-quadtree", "d3-timer"])
+  files[`runtime/${name}-LICENSE`] = await readFile(
+    join(root, "node_modules", name, "LICENSE"),
+  );
 for (const name of [
   "ort-wasm-simd-threaded.mjs",
   "ort-wasm-simd-threaded.wasm",
