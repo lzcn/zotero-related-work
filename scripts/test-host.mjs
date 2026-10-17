@@ -31,10 +31,7 @@ const prefs = {
   "extensions.enabledScopes": 15,
   "extensions.zotero.automaticScraperUpdates": false,
   "extensions.zotero.similar-works.backgroundStartupDelayMs": 0,
-  "extensions.zotero.similar-works.recommendationMethod": "semantic",
-  "extensions.zotero.similar-works.tagNameStyle": "space",
-  "extensions.zotero.similar-works.tagSpaceCase": "title",
-  "extensions.zotero.similar-works.tagPreserveHyphens": false,
+  "extensions.zotero.similar-works.tagNameStyle": "sentence",
   "extensions.zotero.similar-works.maxRecommendations": 15,
   "app.update.auto": false,
   "extensions.update.enabled": false,
@@ -57,34 +54,15 @@ files["bootstrap.js"] = strToU8(
 var SWOriginalStartup = startup;
 startup = async function(data) {
   await Zotero.initializationPromise;
-  const oldDirectory = PathUtils.join(Zotero.DataDirectory.dir, "similar-works");
-  await IOUtils.makeDirectory(PathUtils.join(oldDirectory, "models"), {createAncestors:true});
-  await IOUtils.writeUTF8(PathUtils.join(oldDirectory,"models","migration-marker"),"preserved model cache");
-  const retiredModel = PathUtils.join(oldDirectory,"models","minilm-l6-q8-v1");
-  await IOUtils.makeDirectory(retiredModel,{createAncestors:true});
-  await IOUtils.writeUTF8(PathUtils.join(retiredModel,"onnx-model_quantized.onnx"),"obsolete model");
-  const compiledMarker = PathUtils.join(oldDirectory,"models","minilm-l6-fp32-v2","coreml-cache","preserve-marker");
-  await IOUtils.makeDirectory(PathUtils.parent(compiledMarker),{createAncestors:true});
-  await IOUtils.writeUTF8(compiledMarker,"preserve compiled model");
-  await IOUtils.writeUTF8(PathUtils.join(oldDirectory,"models","minilm-l6-fp32-v2","onnx-model.onnx.tmp"),"interrupted download");
-  const oldRuntime = PathUtils.join(oldDirectory,"runtime","f".repeat(64));
-  await IOUtils.makeDirectory(oldRuntime,{createAncestors:true});
-  await IOUtils.writeUTF8(PathUtils.join(oldRuntime,"inference"),"obsolete runtime");
   if (${JSON.stringify(process.env.SW_HOST_NATIVE_MODEL_DIR || "")}) {
     const source = ${JSON.stringify(process.env.SW_HOST_NATIVE_MODEL_DIR || "")};
-    const target = PathUtils.join(oldDirectory, "models", "minilm-l6-fp32-v2");
+    const target = PathUtils.join(Zotero.DataDirectory.dir, "related-work", "model");
     await IOUtils.makeDirectory(target, { createAncestors:true, ignoreExisting:true });
     for (const name of ["model.onnx", "tokenizer.json", "tokenizer_config.json", "config.json", "special_tokens_map.json"]) {
-      const filename = name === "model.onnx" ? "onnx-model.onnx" : name;
       if (await IOUtils.exists(PathUtils.join(source, name)))
-        await IOUtils.copy(PathUtils.join(source, name), PathUtils.join(target, filename));
+        await IOUtils.copy(PathUtils.join(source, name), PathUtils.join(target, name));
     }
   }
-  const {Sqlite} = ChromeUtils.importESModule("resource://gre/modules/Sqlite.sys.mjs");
-  const oldDB = await Sqlite.openConnection({path:PathUtils.join(oldDirectory,"similarity.sqlite")});
-  await oldDB.execute("CREATE TABLE migration_probe (value TEXT)");
-  await oldDB.execute("INSERT INTO migration_probe VALUES ('preserved index')");
-  await oldDB.close();
   await SWOriginalStartup(data);
   setTimeout(async () => {
     const result = {};
@@ -92,80 +70,6 @@ startup = async function(data) {
       if (!SWReady || !SWScope.SWSection._registered) throw new Error("Sidebar did not register");
       await SWScope.SWIndexer.corpus.ready;
       await SWScope.SWSemantic.start(SWScope.SWIndexer.corpus);
-      for (const key of ["recommendationMethod","tagSpaceCase","tagPreserveHyphens"])
-        if (Zotero.Prefs.prefHasUserValue("similar-works."+key)) throw new Error("Obsolete preference survived migration: "+key);
-      if (Zotero.Prefs.get("similar-works.tagNameStyle")!=="title" || Zotero.Prefs.get("similar-works.maxRecommendations")!==15) throw new Error("Preference migration lost the selected naming style or result count");
-      Zotero.Prefs.set("similar-works.tagNameStyle","sentence");
-      const migratedRoot=PathUtils.join(Zotero.DataDirectory.dir,"related-work");
-      if (await IOUtils.exists(PathUtils.join(migratedRoot,"models","minilm-l6-q8-v1")) || await IOUtils.exists(PathUtils.join(migratedRoot,"runtime","f".repeat(64))) || await IOUtils.exists(PathUtils.join(migratedRoot,"model","onnx-model.onnx.tmp"))) throw new Error("Retired cache files survived migration");
-      if (await IOUtils.readUTF8(PathUtils.join(migratedRoot,"model","coreml-cache","preserve-marker"))!=="preserve compiled model") throw new Error("Cleanup removed current Core ML cache");
-      result.cleanup=true;
-      if (${JSON.stringify(process.env.SW_HOST_CACHE_SNAPSHOT || "")}) {
-        const cachePath = PathUtils.join(Zotero.DataDirectory.dir,"upgrade-cache-test.sqlite");
-        await IOUtils.copy(${JSON.stringify(process.env.SW_HOST_CACHE_SNAPSHOT || "")},cachePath);
-        const cacheDB = await Sqlite.openConnection({path:cachePath});
-        try {
-          const docs = await cacheDB.execute("SELECT key,hash,weak FROM docs");
-          const expected = await cacheDB.execute("SELECT COUNT(*) AS c FROM embeddings e JOIN docs d ON e.key=d.key AND e.sourceHash=d.hash WHERE e.model=?",[SWScope.SWSemantic.version]);
-          const expectedCount = expected[0].getResultByName("c");
-          if (!expectedCount) throw new Error("Upgrade snapshot has no reusable embeddings");
-          const sample=await cacheDB.execute("SELECT key,vector FROM embeddings WHERE model=? ORDER BY key LIMIT 1",[SWScope.SWSemantic.version]);
-          const sampleBytes=sample[0].getResultByName("vector");
-          await cacheDB.execute("INSERT OR REPLACE INTO meta (k,v) VALUES ('retrievalCacheVersion','0')");
-          await cacheDB.execute("INSERT OR REPLACE INTO recommendations (cacheKey,payload,computedAt) VALUES ('cleanup-probe','{}',0)");
-          for(const [key,model] of [["0/CLEANUP-OLD","minilm-l6-q8-v1"],["0/CLEANUP-ORPHAN",SWScope.SWSemantic.version]])
-            await cacheDB.execute("INSERT OR REPLACE INTO embeddings (key,sourceHash,model,vector,updatedAt) VALUES (?,?,?, ?,0)",[key,"orphan",model,new Uint8Array(sampleBytes)]);
-          const maintenance=new SWScope.SWCorpus();maintenance._db=cacheDB;
-          await maintenance._migrateRetrievalCache();
-          const leftovers=await cacheDB.execute("SELECT COUNT(*) AS c FROM embeddings WHERE key LIKE ?",["0/CLEANUP-%"]);
-          const oldRanks=await cacheDB.execute("SELECT COUNT(*) AS c FROM recommendations");
-          if (leftovers[0].getResultByName("c") || oldRanks[0].getResultByName("c")) throw new Error("Database migration left retired rows");
-          const retained=await cacheDB.execute("SELECT vector FROM embeddings WHERE key=?",[sample[0].getResultByName("key")]);
-          const retainedBytes=retained[0].getResultByName("vector");
-          if (sampleBytes.length!==retainedBytes.length || sampleBytes.some((byte,i)=>byte!==retainedBytes[i])) throw new Error("Database cleanup rewrote an existing vector");
-          await cacheDB.execute("INSERT INTO recommendations (cacheKey,payload,computedAt) VALUES ('new-ranking','{}',1)");
-          await maintenance._migrateRetrievalCache();
-          const freshRanks=await cacheDB.execute("SELECT COUNT(*) AS c FROM recommendations");
-          if(freshRanks[0].getResultByName("c")!==1) throw new Error("Repeated migration deleted new rankings");
-          result.databaseCleanup=true;
-          result.cacheMigration = [];
-          for (const source of [${JSON.stringify(process.env.SW_HOST_PREVIOUS_SEMANTIC || "")}, SWScope.SWPlugin.rootURI + "src/semantic.js"].filter(Boolean)) {
-            const scope = {...SWScope};
-            const sourceURI = source.startsWith("file:") || source.includes("://") ? source : Services.io.newFileURI(Zotero.File.pathToFile(source)).spec;
-            Services.scriptloader.loadSubScript(sourceURI,scope);
-            const cache = scope.SWSemantic;
-            const corpus = {
-              docs:new Map(docs.map(row=>[row.getResultByName("key"),{hash:row.getResultByName("hash"),weak:!!row.getResultByName("weak")} ])),
-              ready:Promise.resolve(),progress:{phase:"ready"},
-              _db:{execute:async (sql,params)=>{
-                if (!sql.startsWith("SELECT ")) throw new Error("Upgrade loader attempted to write existing vectors");
-                return cacheDB.execute(sql,params);
-              }}
-            };
-            let lastTick=Date.now(),maxEventLoopDelayMs=0;
-            const cacheWindow=Zotero.getMainWindow();
-            const heartbeat=cacheWindow.setInterval(()=>{
-              const now=Date.now();maxEventLoopDelayMs=Math.max(maxEventLoopDelayMs,now-lastTick-5);lastTick=now;
-            },5);
-            const started=Date.now();
-            try {
-              await cache.start(corpus);
-              await new Promise(resolve=>setTimeout(resolve,0));
-              if (cache.vectors.size!==expectedCount) throw new Error("Upgrade lost reusable vectors");
-              cache._pump=()=>{throw new Error("Upgrade unnecessarily rebuilt embeddings");};
-              cache._init=async()=>{throw new Error("Upgrade unnecessarily loaded/downloaded a model");};
-              cache.enable();
-              if (cache._queue.length) throw new Error("Upgrade queued unchanged embeddings");
-              result.cacheMigration.push({source:source.endsWith("src/semantic.js")?"current":"previous",vectors:cache.vectors.size,loadMs:Date.now()-started,maxEventLoopDelayMs,queuedItems:cache._queue.length});
-            } finally { cacheWindow.clearInterval(heartbeat);cache.stop(); }
-          }
-        } finally { await cacheDB.close(); }
-      }
-      const movedDirectory = PathUtils.join(Zotero.DataDirectory.dir,"related-work");
-      if (await IOUtils.exists(oldDirectory)) throw new Error("Legacy directory was not migrated");
-      if (await IOUtils.readUTF8(PathUtils.join(movedDirectory,"models","migration-marker")) !== "preserved model cache") throw new Error("Model cache was lost in migration");
-      const migrated = await SWScope.SWIndexer.corpus._db.execute("SELECT value FROM migration_probe");
-      if (migrated[0].getResultByName("value") !== "preserved index") throw new Error("Index was lost in migration");
       for (let i = 0; i < 100 && !SWScope.SWSection._preferencePane; i++)
         await new Promise(resolve => setTimeout(resolve, 50));
       if (!SWScope.SWSection._preferencePane) throw new Error("Settings did not register");
@@ -605,22 +509,9 @@ try {
     console.log(
       "PASS Native host inference and cancellation: " + result.nativeBackend,
     );
-  if (result.cacheMigration)
-    console.log(
-      "PASS Existing cache reuse without writes, re-encoding or model initialization: " +
-        JSON.stringify(result.cacheMigration),
-    );
   console.log(
     "PASS Packaged startup, single registration, localized progress, narrow-sidebar text containment, native semantic vector reload and foreground scheduling, live build/index diagnostics, native settings saving, opt-in existing/new tag recommendations, native tag merge/normalization, persisted naming presets/hashtag, protected colored/excluded tags, complete tag list, shift/select-all and bulk formatting, unavailable graph entries and blocked graph opening, shutdown cleanup.",
   );
-  if (result.cleanup)
-    console.log(
-      "PASS Retired model/runtime/temp files and obsolete preferences removed; current Core ML cache and settings preserved.",
-    );
-  if (result.databaseCleanup)
-    console.log(
-      "PASS Old ranks and orphan/retired vectors removed transactionally; valid vector bytes preserved and repeated migration retains new ranks.",
-    );
   passed = true;
 } finally {
   clearTimeout(timeout);

@@ -211,7 +211,7 @@ test("switching away and quitting terminate inference and abort downloads", asyn
       aborted++;
     },
   });
-  const pending = semantic._request("encode", { texts: ["hashing"] });
+  const pending = semantic._request("tokenize", { texts: ["hashing"] });
   const rejected = assert.rejects(pending, /paused/);
   semantic.stop();
   await rejected;
@@ -230,7 +230,8 @@ test("a source changing during inference never persists an obsolete embedding", 
     getField: () => "Hashing",
   });
   semantic._init = async () => {};
-  semantic._request = async () => {
+  semantic._native = {};
+  semantic._nativeEncode = async () => {
     semantic.corpus.docs.set("1/A", { hash: "new" });
     const vector = new Float32Array(384);
     vector[0] = 1;
@@ -343,24 +344,6 @@ test("model cache deduplicates loads and verifies downloaded bytes", async () =>
   assert.deepEqual(a, b);
 });
 
-test("failed cache maintenance leaves lexical retrieval available and prevents inference writes", async () => {
-  const { semantic, context } = fixture();
-  context.SWMigration = {
-    files: async () => {
-      throw new Error("Cache temporarily busy");
-    },
-  };
-  await semantic.start(semantic.corpus);
-  semantic.enable();
-  assert.equal(semantic._enabled, false);
-  assert.equal(semantic.status.state, "error");
-  assert.match(semantic.status.error, /temporarily busy/);
-  semantic.corpus.docs.set("1/Q", { hash: "query" });
-  semantic.corpus.search.search = async () => [{ key: "1/A", score: 0.8 }];
-  const result = await semantic.recommend("1/Q", 10);
-  assert.equal(result.matches[0].key, "1/A");
-});
-
 test("rapid method switches do not let an old worker failure poison the new queue", async () => {
   const { semantic, context } = fixture();
   semantic._enabled = true;
@@ -439,7 +422,8 @@ test("tag-name inference reuses the paper vector and cached tags, serializes wit
   let running = 0,
     peak = 0,
     requests = 0;
-  semantic._request = async (_type, { texts }) => {
+  semantic._native = {};
+  semantic._nativeEncode = async (texts) => {
     running++;
     peak = Math.max(peak, running);
     requests++;
@@ -466,7 +450,8 @@ test("tag-name inference reuses the paper vector and cached tags, serializes wit
     await semantic.tagSimilarity({}, ["Missing"], () => false),
     null,
   );
-  semantic._request = async (_type, { texts }) => {
+  semantic._native = {};
+  semantic._nativeEncode = async (texts) => {
     semantic.corpus.docs.get("1/A").hash = "changed";
     return { vectors: texts.map(() => Array(384).fill(0)) };
   };
@@ -509,53 +494,51 @@ test("background inference waits for host idle time and foreground selection rel
   assert.ok(idleCallback);
 });
 
-test("worker microbatches similar lengths and transfers normalized vectors in input order", async () => {
+test("tokenizer worker returns native inputs with bounded token length in document order", async () => {
   const source = fs
     .readFileSync(path.join(__dirname, "../ml/worker.js"), "utf8")
     .replace(
-      'import { env, pipeline, AutoTokenizer } from "@huggingface/transformers";',
+      'import { env, AutoTokenizer } from "@huggingface/transformers";',
       "",
     );
   const messages = [],
-    batches = [];
+    calls = [];
   const context = vm.createContext({
-    env: { backends: { onnx: { wasm: {} } } },
+    env: {},
     Response: globalThis.Response,
-    Float32Array,
-    pipeline: async () => async (texts) => {
-      batches.push(texts);
-      const data = new Float32Array(texts.length * 384);
-      texts.forEach((text, index) => {
-        data[index * 384 + Number(text[0])] = 1;
-      });
-      return { data, dims: [texts.length, 384] };
-    },
-    self: {
-      setTimeout(callback) {
-        callback();
-      },
-      postMessage(message, transfer) {
-        messages.push({ message, transfer });
+    AutoTokenizer: {
+      from_pretrained: async () => (text, options) => {
+        calls.push({ text, options });
+        return {
+          input_ids: { data: [BigInt(text.length)] },
+          attention_mask: { data: [1n] },
+        };
       },
     },
+    self: { postMessage: (message) => messages.push(message) },
   });
   vm.runInContext(source, context);
   await context.self.onmessage({
-    data: { type: "init", id: 1, runtime: "local/", model: "fixture" },
+    data: { type: "init", id: 1, model: "fixture" },
   });
-  const texts = ["1" + "a".repeat(100), "2tiny", "3" + "b".repeat(110)];
-  await context.self.onmessage({ data: { type: "encode", id: 2, texts } });
-  const result = messages.at(-1);
+  await context.self.onmessage({
+    data: { type: "tokenize", id: 2, texts: ["first", "second"] },
+  });
+  assert.equal(messages[0].ready, true);
   assert.deepEqual(
-    batches.map((batch) => batch.length),
-    [1, 2],
+    calls.map(({ text }) => text),
+    ["first", "second"],
   );
-  assert.equal(result.message.vectors.length, 3);
-  assert.equal(result.transfer.length, 3);
-  result.message.vectors.forEach((vector, index) => {
-    assert.equal(vector[index + 1], 1);
-    assert.equal(vector.length, 384);
-  });
+  assert.ok(
+    calls.every(
+      ({ options }) =>
+        options.truncation &&
+        options.max_length === 256 &&
+        options.padding === "max_length",
+    ),
+  );
+  assert.equal(messages[1].inputs[0].input_ids[0], 5);
+  assert.equal(messages[1].inputs[1].input_ids[0], 6);
 });
 
 test("native transport assembles partial lines and preserves subsequent replies", async () => {

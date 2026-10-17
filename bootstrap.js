@@ -18,15 +18,26 @@ var SWGeneration = 0;
 var SWStartupPromise = null;
 var SWShutdownPromise = null;
 var SWQuitObserver = null;
+var SWCancelReadiness = null;
 
 function stopWork() {
   SWReady = false;
   ++SWGeneration;
-  SWScope.SWTags?.stop();
-  SWScope.SWGraph?.stop();
-  SWScope.SWSection?.shutdown();
-  SWScope.SWSemantic?.stop();
-  SWScope.SWIndexer?.requestStop?.();
+  SWCancelReadiness?.();
+  SWCancelReadiness = null;
+  for (const stop of [
+    () => SWScope.SWTags?.stop(),
+    () => SWScope.SWGraph?.stop(),
+    () => SWScope.SWSection?.shutdown(),
+    () => SWScope.SWSemantic?.stop(),
+    () => SWScope.SWIndexer?.requestStop?.(),
+  ]) {
+    try {
+      stop();
+    } catch (error) {
+      Zotero.logError(error);
+    }
+  }
 }
 
 function removeQuitObserver() {
@@ -42,18 +53,6 @@ async function startup(data) {
   return SWStartupPromise;
 }
 
-async function migrateDataDirectory() {
-  const legacy = PathUtils.join(Zotero.DataDirectory.dir, "similar-works");
-  const current = PathUtils.join(Zotero.DataDirectory.dir, "related-work");
-  if (!(await IOUtils.exists(legacy))) return;
-  if (await IOUtils.exists(current))
-    throw new Error(
-      "Both similar-works and related-work data directories exist; neither was overwritten.",
-    );
-  // Move the whole cache before opening SQLite, including WAL, models and progress.
-  await IOUtils.move(legacy, current, { noOverwrite: true });
-}
-
 async function start({ id, version, rootURI }, token) {
   try {
     SWScope.SWPlugin = { id, version, rootURI };
@@ -64,7 +63,6 @@ async function start({ id, version, rootURI }, token) {
       "corpus.js",
       "indexer.js",
       "semantic.js",
-      "migration.js",
       "tags.js",
       "graph.js",
       "section.js",
@@ -80,7 +78,13 @@ async function start({ id, version, rootURI }, token) {
       },
     };
     Services.obs?.addObserver(SWQuitObserver, "quit-application-granted");
-    await Zotero.initializationPromise;
+    await Promise.race([
+      Zotero.initializationPromise,
+      new Promise((resolve) => {
+        SWCancelReadiness = resolve;
+      }),
+    ]);
+    SWCancelReadiness = null;
     if (token !== SWGeneration) return;
     const service = Components.classes[
       "@mozilla.org/addons/addon-manager-startup;1"
@@ -90,9 +94,6 @@ async function start({ id, version, rootURI }, token) {
       [["content", "similar-works", rootURI + "content/"]],
     );
     await SWScope.SWTags.loadTerms(rootURI);
-    if (token !== SWGeneration) return;
-    SWScope.SWMigration.preferences();
-    await migrateDataDirectory();
     if (token !== SWGeneration) return;
     await SWScope.SWIndexer.start();
     if (token !== SWGeneration) return;
@@ -105,7 +106,7 @@ async function start({ id, version, rootURI }, token) {
       Zotero.logError(error),
     );
   } catch (error) {
-    SWReady = false;
+    stopWork();
     Zotero.logError(new Error("[similar-works] startup failed: " + error));
     await releaseResources();
   }
@@ -116,46 +117,41 @@ function releaseChrome() {
   SWChrome = null;
 }
 
-async function releaseResources() {
-  try {
-    await SWScope.SWTags?.finishWrites();
-    removeQuitObserver();
-    SWScope.SWSemantic?.stop();
-    await SWScope.SWSemantic?._running;
-    await SWScope.SWSemantic?._loaded;
-    if (SWScope.SWSection) SWScope.SWSection.shutdown();
-    if (SWScope.SWIndexer) await SWScope.SWIndexer.shutdown();
-    if (SWScope.SWIndexer?.corpus) await SWScope.SWIndexer.corpus.close();
-  } finally {
-    releaseChrome();
+async function releaseResources(appShutdown = false) {
+  const actions = [
+    removeQuitObserver,
+    () => SWScope.SWSemantic?.stop(),
+    () => SWScope.SWTags?.finishWrites(),
+    ...(appShutdown ? [] : [() => SWScope.SWSemantic?._running]),
+    () => SWScope.SWSemantic?._loaded,
+    ...(appShutdown
+      ? []
+      : [
+          () => SWScope.SWSection?.shutdown(),
+          () => SWScope.SWIndexer?.shutdown(),
+        ]),
+    () => SWScope.SWIndexer?.corpus?.close(),
+    releaseChrome,
+  ];
+  for (const action of actions) {
+    try {
+      await action();
+    } catch (error) {
+      Zotero.logError(error);
+    }
   }
 }
 
 async function shutdown(data, reason) {
   stopWork();
   removeQuitObserver();
-  // Our independent SQLite connection blocks profile shutdown until explicitly closed.
-  // Do not await Zotero startup or its library scans while the application is quitting.
-  if (typeof APP_SHUTDOWN !== "undefined" && reason === APP_SHUTDOWN) {
-    try {
-      await SWScope.SWTags?.finishWrites();
-      await SWScope.SWSemantic?._loaded;
-      await SWScope.SWIndexer?.corpus?.close();
-    } finally {
-      releaseChrome();
-    }
-    return;
-  }
   if (SWShutdownPromise) return SWShutdownPromise;
+  const appShutdown =
+    typeof APP_SHUTDOWN !== "undefined" && reason === APP_SHUTDOWN;
   SWShutdownPromise = (async () => {
-    SWReady = false;
-    ++SWGeneration;
-    await SWStartupPromise;
-    try {
-      await releaseResources();
-    } catch (error) {
-      Zotero.logError(error);
-    }
+    // Application quit must not wait for Zotero startup or library scans.
+    if (!appShutdown) await SWStartupPromise;
+    await releaseResources(appShutdown);
   })();
   return SWShutdownPromise;
 }
@@ -171,7 +167,11 @@ function onMainWindowLoad({ window }) {
 function onMainWindowUnload({ window }) {
   try {
     SWScope.SWSection.removeWindow(window);
-  } catch (e) {}
+  } catch (e) {
+    Zotero.logError(
+      new Error("[similar-works] onMainWindowUnload failed: " + e),
+    );
+  }
 }
 
 function install() {}

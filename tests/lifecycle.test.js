@@ -64,7 +64,6 @@ function fixture({
             stop: () => {},
             finishWrites: async () => {},
           };
-          scope.SWMigration = { preferences() {} };
           scope.SWIndexer = {
             corpus,
             start: async () => state.starts++,
@@ -94,8 +93,8 @@ function fixture({
 test("repeated startup and shutdown register and close once", async () => {
   const h = fixture();
   await Promise.all([h.context.startup(h.data), h.context.startup(h.data)]);
-  assert.equal(h.state.loads.length, 10);
-  assert.equal(new Set(h.state.loads).size, 10);
+  assert.equal(h.state.loads.length, 9);
+  assert.equal(new Set(h.state.loads).size, 9);
   assert.ok(h.state.loads.some((uri) => uri.endsWith("search.js")));
   assert.equal(h.state.starts, 1);
   assert.equal(h.state.registered, 1);
@@ -150,6 +149,44 @@ test("application quit closes storage without waiting for Zotero startup", async
   assert.equal(h.state.registered, 0);
 });
 
+test(
+  "disabling before Zotero readiness cancels startup without waiting for the host",
+  { timeout: 2000 },
+  async () => {
+    const h = fixture({ deferred: true, deferZotero: true });
+    const starting = h.context.startup(h.data);
+    await new Promise((resolve) => setImmediate(resolve));
+    await h.context.shutdown();
+    await starting;
+    assert.equal(h.state.registered, 0);
+    assert.equal(h.state.closed, 1);
+    assert.equal(h.state.observers.size, 0);
+  },
+);
+
+test("failed cleanup steps do not prevent database and chrome cleanup", async () => {
+  for (const reason of [undefined, 2]) {
+    const h = fixture();
+    h.context.APP_SHUTDOWN = 2;
+    await h.context.startup(h.data);
+    let released = false;
+    h.context.SWChrome = {
+      destruct() {
+        released = true;
+      },
+    };
+    h.context.SWScope.SWTags.finishWrites = async () => {
+      throw new Error("Failed tag write");
+    };
+    await h.context.shutdown(h.data, reason);
+    assert.equal(h.state.closed, 1);
+    assert.equal(released, true);
+    assert.ok(
+      h.state.errors.some((error) => /Failed tag write/.test(error.message)),
+    );
+  }
+});
+
 test("confirmed quit cancels work before add-on shutdown is dispatched", async () => {
   const h = fixture();
   await h.context.startup(h.data);
@@ -161,29 +198,7 @@ test("confirmed quit cancels work before add-on shutdown is dispatched", async (
   assert.equal(h.state.injected.length, 2);
 });
 
-test("cache directory migration moves the complete folder once and refuses to overwrite existing data", async () => {
-  const h = fixture();
-  const files = new Set(["/data/similar-works"]);
-  const moves = [];
-  h.context.IOUtils.exists = async (path) => files.has(path);
-  h.context.IOUtils.move = async (from, to, options) => {
-    assert.equal(options.noOverwrite, true);
-    moves.push([from, to]);
-    files.delete(from);
-    files.add(to);
-  };
-  await h.context.migrateDataDirectory();
-  await h.context.migrateDataDirectory();
-  assert.deepEqual(moves, [["/data/similar-works", "/data/related-work"]]);
-  files.add("/data/similar-works");
-  await assert.rejects(
-    h.context.migrateDataDirectory(),
-    /neither was overwritten/,
-  );
-  assert.equal(moves.length, 1);
-});
-
-test("shutdown waits for owned cache migration before closing storage", async () => {
+test("shutdown waits for cached vector loading before closing storage", async () => {
   for (const reason of [undefined, 2]) {
     const h = fixture();
     await h.context.startup(h.data);

@@ -59,8 +59,7 @@ var SWCorpus = class {
       this._db = await Sqlite.openConnection({ path: this._dbPath });
       if (this._stopped) return;
       await this._db.execute("PRAGMA journal_mode = WAL");
-      await this._ensureSchema();
-      await this._migrateRetrievalCache();
+      await this._db.executeTransaction(() => this._ensureSchema());
       await this._loadAll();
     } catch (e) {
       if (this._stopped) return;
@@ -77,28 +76,29 @@ var SWCorpus = class {
   }
 
   async _ensureSchema() {
+    const tables = await this._db.execute(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE ?",
+      ["sqlite_%"],
+    );
+    if (tables.length) {
+      const hasMeta = tables.some(
+        (row) => row.getResultByName("name") === "meta",
+      );
+      const rows = hasMeta
+        ? await this._db.execute("SELECT v FROM meta WHERE k = 'schemaVersion'")
+        : [];
+      const version = rows[0]?.getResultByName("v");
+      if (String(version) !== String(SW_SCHEMA_VERSION))
+        throw new Error(
+          `Unsupported index schema: ${version ?? "missing"}; expected ${SW_SCHEMA_VERSION}`,
+        );
+    }
     await this._db.execute(
       "CREATE TABLE IF NOT EXISTS docs (key TEXT PRIMARY KEY, hash TEXT NOT NULL, weak INTEGER NOT NULL DEFAULT 0, tf TEXT NOT NULL)",
     );
     await this._db.execute(
       "CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL)",
     );
-    const schema = await this._db.execute(
-      "SELECT v FROM meta WHERE k = 'schemaVersion'",
-    );
-    if (
-      schema.length &&
-      Number(schema[0].getResultByName("v")) > SW_SCHEMA_VERSION
-    )
-      throw new Error("The index was created by a newer plugin version");
-    const oldSchema = schema.length
-      ? Number(schema[0].getResultByName("v"))
-      : 0;
-    if (oldSchema > 0 && oldSchema < SW_SCHEMA_VERSION) {
-      const backupPath = this._dbPath + ".v" + oldSchema + "-backup";
-      if (!(await IOUtils.exists(backupPath)))
-        await this._db.execute("VACUUM INTO ?", [backupPath]);
-    }
     await this._db.execute(
       "CREATE TABLE IF NOT EXISTS doc_updates (key TEXT PRIMARY KEY, updatedAt INTEGER NOT NULL)",
     );
@@ -157,35 +157,6 @@ var SWCorpus = class {
     );
   }
 
-  async _migrateRetrievalCache() {
-    if (this._stopped) return;
-    const rows = await this._db.execute(
-      "SELECT v FROM meta WHERE k = 'retrievalCacheVersion'",
-    );
-    const previous = rows.length ? Number(rows[0].getResultByName("v")) : 0;
-    if (!Number.isInteger(previous) || previous < 0)
-      throw new Error("Invalid retrieval cache migration version");
-    if (previous >= 1) return;
-    // Keep the vector/schema versions. Only disposable ranks and unusable rows
-    // are retired, atomically with the marker so an interrupted upgrade retries.
-    await this._db.executeTransaction(async () => {
-      const statements = [
-        "DELETE FROM recommendations",
-        "DELETE FROM embeddings WHERE model = 'minilm-l6-q8-v1' OR NOT EXISTS (SELECT 1 FROM docs WHERE docs.key = embeddings.key AND docs.hash = embeddings.sourceHash)",
-        ...["fingerprints", "doc_updates", "source_updates"].map(
-          (table) =>
-            `DELETE FROM ${table} WHERE NOT EXISTS (SELECT 1 FROM docs WHERE docs.key = ${table}.key)`,
-        ),
-        "INSERT OR REPLACE INTO meta (k, v) VALUES ('retrievalCacheVersion', '1')",
-      ];
-      for (const sql of statements) {
-        if (this._stopped) throw new Error("Cache migration cancelled");
-        await this._db.execute(sql);
-      }
-      if (this._stopped) throw new Error("Cache migration cancelled");
-    });
-  }
-
   async _loadAll() {
     var countRows = await this._db.execute("SELECT COUNT(*) AS c FROM docs");
     var total = countRows.length ? countRows[0].getResultByName("c") : 0;
@@ -196,7 +167,7 @@ var SWCorpus = class {
     var sliceStarted = Date.now();
     while (!this._stopped) {
       var rows = await this._db.execute(
-        "SELECT d.key, d.hash, d.weak, d.tf, f.counts, f.signature, f.epoch, f.simhash FROM docs d LEFT JOIN fingerprints f ON f.key = d.key ORDER BY d.key LIMIT " +
+        "SELECT d.key, d.hash, d.weak, f.counts, f.signature, f.epoch, f.simhash FROM docs d LEFT JOIN fingerprints f ON f.key = d.key ORDER BY d.key LIMIT " +
           chunk +
           " OFFSET " +
           offset,
@@ -210,9 +181,8 @@ var SWCorpus = class {
         var tf;
         try {
           var counts = row.getResultByName("counts");
-          tf = counts
-            ? SWSearch.decodeCounts(counts)
-            : new Map(Object.entries(JSON.parse(row.getResultByName("tf"))));
+          if (!counts) throw new Error("Missing stored feature counts");
+          tf = SWSearch.decodeCounts(counts);
         } catch (e) {
           throw new Error("Invalid fingerprint counts for " + key, {
             cause: e,
@@ -334,9 +304,6 @@ var SWCorpus = class {
           SWSearch.encodeSimhash(doc.simhash),
         ],
       );
-      await this._db.execute("UPDATE docs SET tf = '{}' WHERE key = ?", [
-        doc.key,
-      ]);
     } else
       await this._db.execute(
         // Sqlite.sys.mjs treats an array starting with an object as batch bindings.

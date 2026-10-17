@@ -43,7 +43,6 @@ export default [
           "TextEncoder",
           "Ci",
           "SWSemantic",
-          "SWMigration",
           "setTimeout",
           "clearTimeout",
           "pref",

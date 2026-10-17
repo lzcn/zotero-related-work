@@ -27,13 +27,10 @@ export const requiredFiles = [
   "content/tags.js",
   "content/tags.css",
   "src/semantic.js",
-  "src/migration.js",
   "content/preferences.xhtml",
   "content/preferences.js",
   "content/build-info.json",
   "runtime/worker.js",
-  "runtime/ort-wasm-simd-threaded.mjs",
-  "runtime/ort-wasm-simd-threaded.wasm",
   "locale/en-US/similar-works.ftl",
   "locale/zh-CN/similar-works.ftl",
 ];

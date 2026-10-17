@@ -15,8 +15,6 @@ var SWSemantic = {
       "9261e7d79b44c8195c1cada2b453e55b00aeb81e907a6664974b4d7776172ab3",
     "special_tokens_map.json":
       "b6d346be366a7d1d48332dbc9fdf3bf8960b5d879522b7799ddba59e76237ee3",
-    "onnx/model_quantized.onnx":
-      "afdb6f1a0e45b715d0bb9b11772f032c399babd23bfc31fed1c170afc848bdb1",
   },
   vectors: new Map(),
   unavailable: new Map(),
@@ -34,7 +32,6 @@ var SWSemantic = {
   _stopped: false,
   _enabled: false,
   _loaded: null,
-  _cacheError: null,
   _notifiedAt: 0,
   _startupTimer: null,
   _idleWait: null,
@@ -51,19 +48,6 @@ var SWSemantic = {
     this.corpus = corpus;
     await corpus.ready;
     if (this._stopped || corpus.progress.phase !== "ready") return;
-    if (typeof SWMigration !== "undefined") {
-      try {
-        await SWMigration.files(() => !this._stopped);
-        if (!this._stopped)
-          await SWMigration.embeddings(corpus, () => !this._stopped);
-      } catch (error) {
-        this._cacheError = error;
-        this.status.state = "error";
-        this.status.error = String(error.message || error);
-        Zotero.logError(error);
-      }
-    }
-    if (this._stopped) return;
     let afterKey = "",
       sliceStarted = Date.now();
     // Keep existing model vectors intact. Keyset pages bound startup memory
@@ -98,12 +82,7 @@ var SWSemantic = {
     }
     if (this._stopped) return;
     this.status.indexedItems = this.vectors.size;
-    if (
-      Zotero.isMac &&
-      !this._enabled &&
-      !this._startupTimer &&
-      !this._cacheError
-    ) {
+    if (Zotero.isMac && !this._enabled && !this._startupTimer) {
       this._startupTimer = setTimeout(() => {
         this._startupTimer = null;
         if (!this._stopped) this.enable();
@@ -112,7 +91,7 @@ var SWSemantic = {
   },
 
   enable() {
-    if (this._stopped || this._cacheError) return;
+    if (this._stopped) return;
     clearTimeout(this._startupTimer);
     this._startupTimer = null;
     this._enabled = true;
@@ -317,9 +296,8 @@ var SWSemantic = {
         !active()
       )
         throw new Error("Semantic encoding cancelled");
-      return this._native
-        ? this._nativeEncode(texts, generation, active)
-        : this._request("encode", { texts });
+      if (!this._native) throw new Error("Native inference is not ready");
+      return this._nativeEncode(texts, generation, active);
     });
     this._encoding = pending.catch(() => null);
     return pending;
@@ -647,10 +625,8 @@ var SWSemantic = {
       await this._request(
         "init",
         {
-          runtime: "resource://similar-works/runtime/",
           model: this.model,
           revision: this.revision,
-          native: !!this._native,
         },
         180000,
       );

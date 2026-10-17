@@ -12,6 +12,19 @@ const { SWCorpus } = require("../src/corpus.js");
 const noPause = async () => {};
 const noCancel = () => false;
 
+test("schema initialization uses LIKE bindings accepted by Gecko", async () => {
+  const corpus = new SWCorpus();
+  corpus._db = {
+    async execute(sql) {
+      // Gecko rejects literal LIKE patterns even when Node SQLite accepts them.
+      if (/\bLIKE\b\s(?![@:?])/i.test(sql))
+        throw new Error("Please enter a LIKE clause with bindings");
+      return [];
+    },
+  };
+  await corpus._ensureSchema();
+});
+
 test("RRF uses fixed ranks rather than incompatible score scales", () => {
   const lexical = [
     { key: "1/A", score: 1000, weak: true },
@@ -98,7 +111,7 @@ test("epoch rebuild preserves field averages with lazy database counts", async (
   assert.equal(index.df.get(SWSearch.hash("w:traffic")), 1);
 });
 
-test("restart after a partial migration rebuilds fingerprints from stored counts", async () => {
+test("missing signatures are rebuilt from stored feature counts", async () => {
   const corpus = new SWCorpus();
   const counts = SWSearch.encodeCounts(new Map([[123, 4]]));
   let page = 0;

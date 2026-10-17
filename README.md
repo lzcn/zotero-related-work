@@ -38,15 +38,17 @@ Settings show preparation progress and processed paper counts, without model nam
 
 ## Data and backup
 
-The rebuildable index is in `related-work/similarity.sqlite` under the Zotero data directory. Progress is recorded in `related-work/index-status.json`. On first startup after the rename, the entire legacy `similar-works/` cache moves to `related-work/` before opening SQLite, including models and progress. If both directories exist, startup reports the conflict without overwriting either. The plugin does not modify Zotero's original full-text database.
+Rebuildable files live under `related-work/` in the Zotero data directory: `similarity.sqlite` stores fingerprints, vectors and rankings; `index-status.json` records progress; `model/` and `runtime/` hold inference files. Unchanged papers reuse their cached vectors. The plugin does not modify Zotero's original full-text database.
 
-Updates reuse compatible cached vectors, model files and the existing database. Valid cached vectors and model files are reused; only missing or changed papers need encoding. Recommendation rankings are recalculated separately as needed, without a full-library rebuild.
-
-On upgrade, one SQLite transaction clears old recommendation ranks, retired quantized-model vectors, stale embeddings and orphan cache rows, then records completion. Failure or interruption rolls back the transaction for retry. Cached files use fixed `related-work/model/` and `related-work/runtime/` directories. Startup moves reusable files out of legacy model/version directories and removes retired caches and interrupted downloads before inference starts. A private ownership manifest retires replaced model files and compilation caches on future updates; incompatible vectors are retired transactionally when the internal model version changes. Current model weights, valid vectors, Core ML compilation caches and recovery backups are preserved. Unrecognized files and directories outside the retired cache directories are left in place. Cleanup does not run a full database compaction during startup.
-
-Obsolete algorithm and tag-format preferences are removed after carrying the old Title Case choice into the current naming setting. Existing tags are not renamed. File cleanup is repeatable, skips symlinked cache trees and finishes its current operation before shutdown.
+Only the current storage format is supported. Startup rejects other database schemas without rewriting them; old directories, preferences and model formats are not imported. Existing library items, notes and tags are retained.
 
 ## Development
+
+### Matching implementation
+
+- **Text** (`src/search.js`): BM25F-style field weighting (title/abstract/body = 4/2/1), 256-feature sparse fingerprints, Block-Max WAND candidate retrieval and cosine ranking.
+- **Semantics** (`src/semantic.js`, `ml/worker.js`, `native/inference.mm`): `Xenova/all-MiniLM-L6-v2`, FP32 ONNX, 384 dimensions; 120-word chunks, mean token pooling and normalized document pooling with first-chunk weight 3. Paper search uses an exact cosine scan within the current library. The model revision and asset checksums are pinned in `src/semantic.js`; ONNX Runtime 1.22.0 uses Core ML with native CPU fallback.
+- **Default ranking**: equal-weight reciprocal rank fusion (RRF, constant 60, top 100 from each ranking). Text search stays available while vectors are unavailable. These parameters are internal.
 
 Use Node.js 22.13+ (22.x) or 24+. Run `npm ci`, then `npm run check`.
 

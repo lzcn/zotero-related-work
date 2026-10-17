@@ -115,13 +115,6 @@ for (const name of ["d3-force", "d3-dispatch", "d3-quadtree", "d3-timer"])
   files[`runtime/${name}-LICENSE`] = await readFile(
     join(root, "node_modules", name, "LICENSE"),
   );
-for (const name of [
-  "ort-wasm-simd-threaded.mjs",
-  "ort-wasm-simd-threaded.wasm",
-])
-  files[`runtime/${name}`] = await readFile(
-    join(root, "node_modules/onnxruntime-web/dist", name),
-  );
 for (const [name, packageName] of [
   ["transformers", "@huggingface/transformers"],
   ["jinja", "@huggingface/jinja"],
@@ -138,7 +131,7 @@ files["runtime/onnxruntime-NOTICES"] = await readFile(
   join(root, "licenses/onnxruntime-notices.txt"),
 );
 
-// Native executables are extracted to a versioned local cache before launch.
+// Native executables are verified and extracted to the runtime cache before launch.
 if (await buildNative()) {
   const manifest = { files: {} };
   for (const name of ["inference", "libonnxruntime.1.22.0.dylib"]) {
