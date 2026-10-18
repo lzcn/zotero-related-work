@@ -606,3 +606,35 @@ test("native embeddings validate dimensions and stop between cancelled chunks", 
     /Invalid native/,
   );
 });
+
+test("tag embedding cache keeps frequently used topics warm and encodes duplicate names once", async () => {
+  const { semantic, context, put } = fixture();
+  context.SWIndexer.docKey = () => "1/A";
+  put("1/A", "one", [1, 0]);
+  semantic._enabled = true;
+  semantic._worker = {};
+  const vector = Array(384).fill(0);
+  vector[0] = 1;
+  semantic._tagVectors.set("Frequent topic", vector);
+  for (let i = 0; i < 511; i++) semantic._tagVectors.set("Topic " + i, vector);
+  const encoded = [];
+  semantic._encode = async (names) => {
+    encoded.push(...names);
+    return { vectors: names.map(() => vector) };
+  };
+  assert.deepEqual(
+    Array.from(
+      await semantic.tagSimilarity({}, [
+        "Frequent topic",
+        "New topic",
+        "New topic",
+      ]),
+    ),
+    [1, 1, 1],
+  );
+  assert.deepEqual(encoded, ["New topic"]);
+  assert.equal(semantic._tagVectors.size, 512);
+  assert.equal(semantic._tagVectors.has("Topic 0"), false);
+  await semantic.tagSimilarity({}, ["Frequent topic", "New topic"]);
+  assert.deepEqual(encoded, ["New topic"]);
+});

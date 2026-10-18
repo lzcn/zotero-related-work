@@ -35,10 +35,21 @@ function fixture() {
     },
   };
   const context = vm.createContext({
+    SWPref: (name, fallback) => {
+      const value = context.Zotero.Prefs.get("similar-works." + name);
+      return value === undefined ? fallback : value;
+    },
     Zotero: {
       Promise: { delay: async () => {} },
       Libraries: { get: () => ({ editable: true }) },
       Items: { getAsync: async () => item },
+      Prefs: { get: () => undefined },
+      locale: "en-US",
+      HTTP: {
+        request: async () => {
+          throw new Error("Unexpected HTTP request");
+        },
+      },
       Tags: {
         getAll: async () => [...tags.keys()].map((tag) => ({ tag })),
         getID: (name) => name,
@@ -54,8 +65,12 @@ function fixture() {
           tags.delete(from);
         },
       },
-      DB: { executeTransaction: async (work) => work() },
+      DB: {
+        executeTransaction: async (work) => work(),
+        queryAsync: async () => [],
+      },
     },
+    URL,
   });
   for (const file of ["stemmer.js", "tokenizer.js", "tags.js"])
     vm.runInContext(
@@ -69,7 +84,13 @@ function fixture() {
   context.SWTags._termLength = Math.max(
     ...Object.keys(catalog.terms).map((key) => key.split(" ").length),
   );
-  return { api: context.SWTags, context, item, tags, writes };
+  return {
+    api: context.SWTags,
+    context,
+    item,
+    tags,
+    writes,
+  };
 }
 
 test("tag recommendations weight same-library neighbors, exclude current tags and deduplicate variants per paper", () => {
@@ -218,7 +239,7 @@ test("read-only and changed tags cannot merge; shutdown stops after the current 
   );
 });
 
-test("hybrid tags use direct topic coverage and neighbor support, and distinguish extracted new phrases", async () => {
+test("text tags use direct topic coverage and neighbor support, and distinguish extracted new phrases", async () => {
   const { api, item } = fixture();
   item.getField = (field) =>
     field === "title"

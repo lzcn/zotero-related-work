@@ -23,20 +23,16 @@ similar-works-pref-limit =
 similar-works-pref-metadata =
     .label = 包含没有全文的文献
 
-similar-works-pref-intro = 自动查找相关文献，所需文件自动准备。文献内容仅在本机处理。
+similar-works-pref-intro = 结合文本与本地 AI 语义匹配查找相关文献。
 similar-works-pref-index-heading = 状态
 similar-works-pref-index = 文献整理
-similar-works-pref-vectors = 相关文献匹配
 similar-works-pref-error = 暂时无法完成准备，请稍后重启 Zotero 重试。
 similar-works-pref-index-value = { $known ->
     [1] { $phase } · 已处理 { $count } / { $total } 篇
    *[0] { $phase } · 已处理 { $count } 篇
     }
-similar-works-pref-vector-value = { $phase } · 已处理 { $count } / { $total } 篇
 similar-works-pref-index-progress =
     .aria-label = 文本索引进度
-similar-works-pref-vector-progress =
-    .aria-label = 相关文献匹配进度
 similar-works-state-preparing = 正在加载索引
 similar-works-state-waiting = 等待处理
 similar-works-state-scanning = 正在扫描文献库
@@ -88,7 +84,7 @@ similar-works-pref-excluded-tags-help = 每行一个标签名称，保护该名�
 similar-works-tags-protected = 所选名称已被排除。请刷新列表，或检查设置中的“标签名称”。
 
 similar-works-tags-select-all = 全选
-similar-works-tags-selection-count = 已选 { $selected } 个，共 { $total } 个标签
+similar-works-tags-selection-count = 已选 { $selected } · 显示 { $visible } / { $total } · 隐藏的已选项 { $hidden }
 similar-works-tags-action = 操作
 similar-works-tags-format = 重命名
 similar-works-tags-merge-action = 合并
@@ -149,3 +145,29 @@ similar-works-graph-unavailable = 此文献已不可用
 similar-works-graph-no-index = 此文献的相似度索引尚未就绪，索引完成后可刷新。
 similar-works-graph-years =
     .title = 发表年份：越新的文献颜色越深，年份未知时显示灰色。
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+similar-works-tags-clear-selection = 清除选择
+
+similar-works-pref-vectors = 相关文献匹配
+
+similar-works-pref-vector-value = { $phase } · 已处理 { $count } / { $total } 篇
+
+similar-works-pref-vector-progress =
+    .aria-label = 相关文献匹配进度

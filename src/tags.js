@@ -722,8 +722,12 @@ var SWTags = {
     const dialog = win.openDialog(
       url,
       "",
-      "chrome,centerscreen,resizable,width=700,height=560",
-      { api: this, libraryID, isMac: !!Zotero.isMac },
+      "chrome,centerscreen,resizable,width=760,height=640",
+      {
+        api: this,
+        libraryID,
+        isMac: !!Zotero.isMac,
+      },
     );
     this._dialogs.add(dialog);
     // Ignore the initial about:blank unload during native window navigation.

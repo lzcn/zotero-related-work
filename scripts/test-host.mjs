@@ -69,6 +69,7 @@ startup = async function(data) {
     try {
       if (!SWReady || !SWScope.SWSection._registered) throw new Error("Sidebar did not register");
       await SWScope.SWIndexer.corpus.ready;
+      if (SWScope.SWLLM || SWScope.SWCodex) throw new Error("Generative AI runtime was loaded");
       await SWScope.SWSemantic.start(SWScope.SWIndexer.corpus);
       for (let i = 0; i < 100 && !SWScope.SWSection._preferencePane; i++)
         await new Promise(resolve => setTimeout(resolve, 50));
@@ -115,7 +116,7 @@ startup = async function(data) {
       const testTagWindows = [];
       const waitFor = async (predicate, step, attempts = 100) => {
         for (let n = 0; n < attempts; n++) {
-          if (predicate()) return;
+          if (await predicate()) return;
           await new Promise(resolve => setTimeout(resolve, 50));
         }
         throw new Error("Tag UI did not finish loading: " + step + " " + JSON.stringify(testTagWindows.filter(win=>!win.closed).map(win=>({mode:win.document.getElementById("mode")?.value,target:win.document.getElementById("target")?.value,preview:win.document.getElementById("preview")?.textContent,checked:[...win.document.querySelectorAll("#tags input")].filter(input=>input.checked).map(input=>input.value)}))));
@@ -174,8 +175,15 @@ startup = async function(data) {
       }
       if (!peers[1].hasTag("deep-learning") || Zotero.Tags.getColor(item.libraryID,"Deep Learning").color !== "#336699") throw new Error("Protected tag data changed");
       Zotero.Prefs.set("extensions.zotero.similar-works.excludeColoredTags",false,true);
+      for (let index = 0; index < 125; index++) {
+        peers[0].addTag("Fixture Tag " + index);
+        peers[1].addTag("Fixture Tag " + index);
+      }
+      await peers[0].saveTx({skipSelect:true});
+      await peers[1].saveTx({skipSelect:true});
+      const managedTagCount = (await tagAPI.catalog(item.libraryID, true)).length;
       const tagDialog = tagAPI.open(doc.defaultView, item.libraryID);
-      await waitFor(() => tagDialog.document?.querySelectorAll('#tags input').length >= 2, 'load tag dialog');
+      await waitFor(() => tagDialog.document?.querySelectorAll('#tags input').length === managedTagCount, 'load all tag dialog rows');
       await tagDialog.document.l10n.ready;
       testTagWindows.push(tagDialog);
       const td = tagDialog.document;
@@ -184,6 +192,24 @@ startup = async function(data) {
         if (input?.closest('label').querySelector('.tag-count')?.textContent.trim() !== "(2)") throw new Error("Tag usage count did not include native note/manual/automatic membership: " + name);
       }
       if (td.getElementById('duplicates').checked) throw new Error("Tag Manager did not default to all tags");
+      td.getElementById('search').value = "deep";
+      td.getElementById('refresh').click();
+      await waitFor(() => td.querySelectorAll('#tags input').length === 2 && [...td.querySelectorAll('#tags input')].every(input => ["Deep Learning", "deep-learning"].includes(input.value)), 'load manual merge candidates');
+      if (td.getElementById('ai-open') || td.getElementById('ai')) throw new Error("AI action remains visible");
+      const firstTag = td.querySelector('#tags input');
+      firstTag.click();
+      await waitFor(() => !td.getElementById('clear-selection').disabled, 'enable clear selection');
+      td.getElementById('search').value = "no-matching-tag";
+      td.getElementById('search').dispatchEvent(new tagDialog.Event('input', {bubbles:true}));
+      await waitFor(() => !td.querySelectorAll('#tags input').length, 'filter selected tag out');
+      await td.l10n.translateElements([td.getElementById('selection-count')]);
+      const selectionArgs = JSON.parse(td.getElementById('selection-count').getAttribute('data-l10n-args'));
+      if (selectionArgs.hidden !== 1 || selectionArgs.selected !== 1 || selectionArgs.visible !== 0) throw new Error("Hidden selection count is incorrect");
+      td.getElementById('clear-selection').click();
+      await waitFor(() => td.getElementById('clear-selection').disabled && td.getElementById('merge').disabled, 'clear filtered selections');
+      td.getElementById('search').value = "deep";
+      td.getElementById('search').dispatchEvent(new tagDialog.Event('input', {bubbles:true}));
+      await waitFor(() => td.querySelectorAll('#tags input').length === 2, 'restore manual candidates');
       td.getElementById('mode').value = "merge";
       td.getElementById('mode').dispatchEvent(new tagDialog.Event("change",{bubbles:true}));
       await waitFor(() => td.querySelectorAll('#tags input').length >= 2, 'render merge action');
@@ -194,7 +220,9 @@ startup = async function(data) {
       await waitFor(() => !td.getElementById('merge').disabled, 'preview merge');
       td.getElementById('target').value = "Deep Learning";
       if (!(await tagAPI.preview(item.libraryID, ["Deep Learning", "deep-learning"]) === 4)) throw new Error("Merge preview did not count all distinct items");
+      const rowsBeforeMerge = [...td.querySelectorAll('#tags input')];
       td.getElementById('merge').click();
+      if (rowsBeforeMerge.some((row, index) => row !== td.querySelectorAll('#tags input')[index] || !row.disabled) || !td.getElementById('clear-selection').disabled) throw new Error('Starting a tag operation rebuilt the list or left selection unlocked');
       await waitFor(() => peers[1].hasTag("Deep Learning") && !peers[1].hasTag("deep-learning"), "apply merge");
       await waitFor(() => !td.getElementById('refresh').disabled, 'merge result');
       await waitFor(() => td.querySelector('.tag-count')?.textContent.trim() === "(4)", 'refresh merged usage count');
@@ -204,6 +232,7 @@ startup = async function(data) {
       peers[1].addTag("Representaton learning");
       await peers[1].saveTx({skipSelect:true});
       td.getElementById('duplicates').checked = true;
+      td.getElementById('search').value = "";
       td.getElementById('refresh').click();
       await waitFor(() => [...td.querySelectorAll('#tags input')].some(input => input.value === "Representaton learning"), 'broader duplicate candidates');
       const duplicateNames = [...td.querySelectorAll('#tags input')].map(input => input.value);
@@ -263,6 +292,7 @@ startup = async function(data) {
       if (!limit) throw new Error("Settings controls did not load");
       if (settings.document.getElementById("similar-works-method")) throw new Error("Internal retrieval algorithm is exposed in Settings");
       if (settings.document.querySelector('[id^="similar-works-graph-"]')) throw new Error("Graph internals are exposed in Settings");
+      if (settings.document.querySelector('[id^="similar-works-ai-"]')) throw new Error("AI settings are visible");
       const matchingLabel = settings.document.getElementById("similar-works-vectors");
       for (let n = 0; n < 100 && !matchingLabel?.textContent.trim(); n++) await new Promise(resolve => setTimeout(resolve, 50));
       if (!matchingLabel?.textContent.trim() || settings.document.getElementById("similar-works-model") || settings.document.getElementById("similar-works-build")) throw new Error("Settings did not show simple preparation status without model internals");
@@ -313,7 +343,7 @@ startup = async function(data) {
       await peers[0].saveTx({skipSelect:true});
       await peers[1].saveTx({skipSelect:true});
       const formatDialog = tagAPI.open(doc.defaultView,item.libraryID);
-      await waitFor(() => formatDialog.document?.querySelectorAll('#tags input').length >= 2, 'load naming variants');
+      await waitFor(() => ["format HTTP parser","#format_HTTP_parser"].every(name => [...(formatDialog.document?.querySelectorAll('#tags input') || [])].some(input => input.value === name)), 'load naming variants');
       const fd = formatDialog.document;
       for (const checkbox of [...fd.querySelectorAll('#tags input')].filter(input=>["format HTTP parser","#format_HTTP_parser"].includes(input.value))) {
         checkbox.checked = true;
@@ -434,6 +464,9 @@ startup = async function(data) {
         if (semantic._native || !exit) throw new Error("Native inference leaked on pause");
       }
 
+      // Pause background work before checking foreground priority.
+      semantic.pause();
+      await semantic._running;
       const originalBuild = semantic._build;
       let selectedBuilt = false;
       semantic.corpus.docs.set("1/HOST-PRIORITY", {hash: "priority"});
@@ -498,19 +531,15 @@ try {
     new Promise((_, reject) => {
       timeout = setTimeout(
         () => reject(new Error("Zotero host test timed out")),
-        process.env.SW_HOST_NATIVE_MODEL_DIR ? 240000 : 90000,
+        90000,
       );
     }),
   ]);
   const result = JSON.parse(await readFile(marker, "utf8"));
   if (code !== 0 || !result.ok)
     throw new Error(JSON.stringify({ code, result }));
-  if (result.nativeBackend)
-    console.log(
-      "PASS Native host inference and cancellation: " + result.nativeBackend,
-    );
   console.log(
-    "PASS Packaged startup, single registration, localized progress, narrow-sidebar text containment, native semantic vector reload and foreground scheduling, live build/index diagnostics, native settings saving, opt-in existing/new tag recommendations, native tag merge/normalization, persisted naming presets/hashtag, protected colored/excluded tags, complete tag list, shift/select-all and bulk formatting, unavailable graph entries and blocked graph opening, shutdown cleanup.",
+    "PASS Local text and AI semantic retrieval, no generative AI runtime/settings, tag filtering and native operations, indexing progress and shutdown cleanup.",
   );
   passed = true;
 } finally {

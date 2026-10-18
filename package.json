@@ -1,6 +1,6 @@
 {
   "name": "zotero-related-work",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "description": "Find similar papers in your Zotero library.",
   "license": "AGPL-3.0-or-later",
@@ -28,13 +28,13 @@
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
-    "@huggingface/transformers": "3.8.1",
     "esbuild": "0.25.10",
     "eslint": "10.11.0",
     "fflate": "0.8.3",
     "prettier": "3.5.3",
     "typescript": "5.8.3",
-    "zotero-types": "3.1.9"
+    "zotero-types": "3.1.9",
+    "@huggingface/transformers": "3.8.1"
   },
   "config": {
     "addonName": "Related Work",

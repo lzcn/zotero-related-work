@@ -1,6 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { zipSync, strToU8 } from "fflate";
+import { URL } from "node:url";
+import { readFile } from "node:fs/promises";
+import { zipSync, unzipSync, strFromU8, strToU8 } from "fflate";
 import { validatePackage } from "../scripts/validate-package.mjs";
 const pkg = {
   name: "zotero-test",
@@ -70,5 +72,24 @@ test("checks actual archive metadata and all referenced assets", () => {
   assert.throws(
     () => validatePackage(archive({ "../escape.js": "const value = 1;" }), pkg),
     /Unsafe archive path/,
+  );
+});
+
+test("production package contains semantic retrieval without generative AI runtimes or settings", async () => {
+  const files = unzipSync(
+    await readFile(new URL("../dist/zotero-related-work.xpi", import.meta.url)),
+  );
+  assert.equal(
+    Object.keys(files).some((name) =>
+      /^(?:src\/(?:llm|codex)\.js$)/.test(name),
+    ),
+    false,
+  );
+  assert.ok(files["src/semantic.js"]);
+  assert.ok(files["runtime/worker.js"]);
+  assert.doesNotMatch(strFromU8(files["bootstrap.js"]), /codex\.js|llm\.js/);
+  assert.doesNotMatch(
+    strFromU8(files["content/preferences.xhtml"]),
+    /similar-works-ai-/,
   );
 });

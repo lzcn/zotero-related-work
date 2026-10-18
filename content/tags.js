@@ -16,6 +16,7 @@
   const refresh = document.getElementById("refresh");
   const selectAll = document.getElementById("select-all");
   const mode = document.getElementById("mode");
+  const clearSelection = document.getElementById("clear-selection");
   const selected = new Set();
   let names = [],
     counts = new Map(),
@@ -61,8 +62,21 @@
     selectAll.disabled = busy || !available.length;
     selectAll.checked = !!available.length && checked === available.length;
     selectAll.indeterminate = checked > 0 && checked < available.length;
-    for (const input of list.querySelectorAll("input"))
+    clearSelection.disabled = busy || !selected.size;
+    document.l10n.setAttributes(
+      document.getElementById("selection-count"),
+      "similar-works-tags-selection-count",
+      {
+        selected: selected.size,
+        visible: visible.length,
+        total: names.length,
+        hidden: selected.size - checked,
+      },
+    );
+    for (const input of list.querySelectorAll("input")) {
       input.checked = selected.has(input.value);
+      input.disabled = busy;
+    }
   }
 
   async function selectionChanged() {
@@ -71,12 +85,6 @@
     previewReady = false;
     apply.disabled = true;
     updateSelection();
-    const count = await fmt("similar-works-tags-selection-count", {
-      selected: selected.size,
-      total: names.length,
-    });
-    if (!active() || token !== revision) return;
-    document.getElementById("selection-count").textContent = count;
     const merging = mode.value === "merge",
       deleting = mode.value === "delete",
       singleRename = mode.value === "format" && selected.size === 1;
@@ -199,7 +207,7 @@
         input.addEventListener("change", () => {
           if (input.checked) selected.add(name);
           else selected.delete(name);
-          void selectionChanged();
+          void selectionChanged().catch(report);
         });
         label.append(input, text, hint);
         fragment.appendChild(label);
@@ -229,15 +237,21 @@
       if (!names.includes(name)) selected.delete(name);
     groups = new Set(api.duplicateGroups(names).flat());
     await render();
-    await selectionChanged();
+    if (active() && token === loadRevision) await selectionChanged();
   }
   function chooseVisible(checked) {
+    if (busy) return;
     for (const name of visible) {
       if (checked) selected.add(name);
       else selected.delete(name);
     }
-    void selectionChanged();
+    void selectionChanged().catch(report);
   }
+  clearSelection.addEventListener("click", () => {
+    if (busy) return;
+    selected.clear();
+    void selectionChanged().catch(report);
+  });
   selectAll.addEventListener("change", () => chooseVisible(selectAll.checked));
   list.addEventListener("keydown", (event) => {
     if (accel(event) && event.key.toLowerCase() === "a") {
@@ -254,7 +268,8 @@
       (mode.value === "format" && target.value === [...selected][0]);
   });
   refresh.addEventListener("click", () => {
-    if (!busy) void load().catch(report);
+    if (busy) return;
+    void load().catch(report);
   });
   const searchChanged = (event) => {
     window.clearTimeout(searchTimer);
@@ -292,7 +307,7 @@
     void render().catch(report);
   });
   mode.addEventListener("change", () => {
-    void selectionChanged();
+    void selectionChanged().catch(report);
     void render().catch(report);
   });
   apply.addEventListener("click", async () => {
@@ -312,7 +327,10 @@
       mode.disabled =
       selectAll.disabled =
         true;
-    await render();
+    loadRevision++;
+    renderRevision++;
+    window.clearTimeout(searchTimer);
+    updateSelection();
     let resultText;
     try {
       const progress = (done, total) => {

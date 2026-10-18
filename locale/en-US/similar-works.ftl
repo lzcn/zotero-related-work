@@ -23,20 +23,16 @@ similar-works-pref-limit =
 similar-works-pref-metadata =
     .label = Include items without full text
 
-similar-works-pref-intro = Find related papers automatically. Required files are prepared automatically; document text stays on this computer.
+similar-works-pref-intro = Find related papers using text and local AI semantic matching.
 similar-works-pref-index-heading = Status
 similar-works-pref-index = Library preparation
-similar-works-pref-vectors = Related paper matching
 similar-works-pref-error = Preparation could not finish. Restart Zotero later to try again.
 similar-works-pref-index-value = { $known ->
     [1] { $phase } · { $count } of { $total } papers processed
    *[0] { $phase } · { $count } papers processed
     }
-similar-works-pref-vector-value = { $phase } · { $count } of { $total } papers processed
 similar-works-pref-index-progress =
     .aria-label = Text indexing progress
-similar-works-pref-vector-progress =
-    .aria-label = Related paper matching progress
 similar-works-state-preparing = Loading index
 similar-works-state-waiting = Waiting
 similar-works-state-scanning = Scanning library
@@ -88,7 +84,7 @@ similar-works-pref-excluded-tags-help = One tag per line. Excluded names and the
 similar-works-tags-protected = A selected name is excluded. Refresh the list or check Tag names in Settings.
 
 similar-works-tags-select-all = Select all
-similar-works-tags-selection-count = { $selected } selected · { $total } tags
+similar-works-tags-selection-count = Selected { $selected } · Showing { $visible } / { $total } · Hidden selections { $hidden }
 similar-works-tags-action = Action
 similar-works-tags-format = Rename
 similar-works-tags-merge-action = Merge
@@ -118,6 +114,9 @@ similar-works-tags-renamed = Renamed to “{ $name }”.
 
 
 
+}
+}
+}
 similar-works-pref-tag-sentence =
     .label = Sentence case
 similar-works-pref-tag-title =
@@ -149,3 +148,29 @@ similar-works-graph-unavailable = This paper is no longer available
 similar-works-graph-no-index = Similarity indexing is not ready for this paper. Refresh after indexing.
 similar-works-graph-years =
     .title = Publication year: newer papers are darker; unknown years are gray.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+similar-works-tags-clear-selection = Clear selection
+
+similar-works-pref-vectors = Related paper matching
+
+similar-works-pref-vector-value = { $phase } · { $count } of { $total } papers processed
+
+similar-works-pref-vector-progress =
+    .aria-label = Related paper matching progress

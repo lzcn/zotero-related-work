@@ -320,7 +320,15 @@ var SWSemantic = {
       )
         return null;
       const generation = this._generation;
-      const missing = names.filter((name) => !this._tagVectors.has(name));
+      const uniqueNames = [...new Set(names)];
+      // Keep frequently reused topics warm while browsing different papers.
+      for (const name of uniqueNames) {
+        const cached = this._tagVectors.get(name);
+        if (!cached) continue;
+        this._tagVectors.delete(name);
+        this._tagVectors.set(name, cached);
+      }
+      const missing = uniqueNames.filter((name) => !this._tagVectors.has(name));
       if (missing.length) {
         const result = await this._encode(missing, active);
         if (generation !== this._generation || this._stopped || !active())

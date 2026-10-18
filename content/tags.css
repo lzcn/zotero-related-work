@@ -84,6 +84,10 @@ button {
 .tag small {
   color: var(--text-secondary, light-dark(#5f6368, #b8bdc4));
 }
+#selection-count {
+  flex: 1;
+  overflow-wrap: anywhere;
+}
 .tag {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) minmax(0, 1fr);
