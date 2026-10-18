@@ -72,6 +72,9 @@ var SWCorpus = class {
         total: 0,
         error: String(e && e.message ? e.message : e),
       };
+      // A rejected schema must not keep the database handle and shutdown
+      // blocker alive after the user has been told the index is unavailable.
+      await this._closeDatabase();
     }
   }
 
@@ -165,6 +168,8 @@ var SWCorpus = class {
     var offset = 0;
     var chunk = 100;
     var sliceStarted = Date.now();
+    var damaged = [];
+    var damagedError = null;
     while (!this._stopped) {
       var rows = await this._db.execute(
         "SELECT d.key, d.hash, d.weak, f.counts, f.signature, f.epoch, f.simhash FROM docs d LEFT JOIN fingerprints f ON f.key = d.key ORDER BY d.key LIMIT " +
@@ -184,9 +189,11 @@ var SWCorpus = class {
           if (!counts) throw new Error("Missing stored feature counts");
           tf = SWSearch.decodeCounts(counts);
         } catch (e) {
-          throw new Error("Invalid fingerprint counts for " + key, {
-            cause: e,
-          });
+          // The index is rebuildable. Drop this row and let the library scan
+          // recreate it instead of making every cached document unreadable.
+          damaged.push(key);
+          damagedError = damagedError || e;
+          continue;
         }
         var doc = {
           hash: row.getResultByName("hash"),
@@ -211,6 +218,35 @@ var SWCorpus = class {
       offset += rows.length;
       this.progress = { phase: "loading", done: offset, total: total };
       await swYield(5);
+    }
+    if (damaged.length) {
+      Zotero.logError(
+        new Error(
+          "[similar-works] rebuilding damaged index rows: " +
+            damaged.join(", "),
+          { cause: damagedError },
+        ),
+      );
+      if (this._db && !this._stopped) {
+        try {
+          await this._db.executeTransaction(async () => {
+            for (const key of damaged) {
+              if (this._stopped) throw new Error("Index repair cancelled");
+              for (const sql of [
+                "DELETE FROM embeddings WHERE key = ?",
+                "DELETE FROM fingerprints WHERE key = ?",
+                "DELETE FROM doc_updates WHERE key = ?",
+                "DELETE FROM source_updates WHERE key = ?",
+                "DELETE FROM docs WHERE key = ?",
+              ])
+                await this._db.execute(sql, [key]);
+              this._sourceStates.delete(key);
+            }
+          });
+        } catch (error) {
+          if (!this._stopped) Zotero.logError(error);
+        }
+      }
     }
     if (rebuild) {
       await this.search.rebuild(
@@ -798,13 +834,10 @@ var SWCorpus = class {
     return this._closePromise;
   }
 
-  async _close() {
-    // An in-progress open must finish before its connection can be closed.
-    await this._ready;
-    await this._taskDrain;
-    if (this._db) {
-      var db = this._db;
-      this._db = null;
+  async _closeDatabase() {
+    var db = this._db;
+    this._db = null;
+    if (db) {
       try {
         await db.close();
       } catch (e) {
@@ -813,6 +846,13 @@ var SWCorpus = class {
     }
     this._shutdownClient?.removeBlocker(this._shutdownBlocker);
     this._shutdownClient = null;
+  }
+
+  async _close() {
+    // An in-progress open must finish before its connection can be closed.
+    await this._ready;
+    await this._taskDrain;
+    await this._closeDatabase();
     this.search.docs.clear();
     this.search.byID.clear();
     this.search.postings.clear();

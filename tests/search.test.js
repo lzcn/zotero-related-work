@@ -6,6 +6,7 @@ global.SWTokenizer = {
   termFreq: tokenizer.swTermFreq,
   isStopword: tokenizer.swIsStopword,
 };
+if (!global.Zotero) global.Zotero = { logError() {} };
 const { SWSearch } = require("../src/search.js");
 global.SWSearch = SWSearch;
 const { SWCorpus } = require("../src/corpus.js");
@@ -437,4 +438,113 @@ test("common title topics survive rare body features and participate in retrieva
   );
   await index.rebuild();
   assert.ok(index.docs.get("1/query").fieldVectors[0].length > 0);
+});
+
+test("damaged fingerprint rows are removed instead of blocking the whole index", async () => {
+  const corpus = new SWCorpus();
+  const counts = SWSearch.encodeCounts(new Map([[123, 4]]));
+  const damaged = SWSearch.encodeCounts(new Map([[456, 2]])).slice(0, -1);
+  const rows = [
+    {
+      getResultByName: (name) =>
+        ({
+          key: "1/A",
+          hash: "a",
+          weak: 0,
+          counts,
+          signature: null,
+          epoch: 0,
+          simhash: null,
+        })[name],
+    },
+    {
+      getResultByName: (name) =>
+        ({
+          key: "1/B",
+          hash: "b",
+          weak: 0,
+          counts: damaged,
+          signature: null,
+          epoch: 0,
+          simhash: null,
+        })[name],
+    },
+  ];
+  const deletes = [];
+  let page = 0;
+  corpus._db = {
+    async execute(sql, params) {
+      if (sql.startsWith("SELECT COUNT")) return [{ getResultByName: () => 2 }];
+      if (sql.startsWith("SELECT d.key")) return page++ ? [] : rows;
+      if (sql.startsWith("SELECT counts"))
+        return [{ getResultByName: () => counts }];
+      if (sql.startsWith("DELETE")) deletes.push([sql, params]);
+      return [];
+    },
+    async executeTransaction(run) {
+      await run();
+    },
+  };
+  corpus._persistFingerprints = async () => {};
+  corpus._maintainEpoch = async () => {};
+  await corpus._loadAll();
+  assert.equal(corpus.progress.phase, "ready");
+  assert.deepEqual([...corpus.docs.keys()], ["1/A"]);
+  assert.equal(deletes.filter(([, params]) => params[0] === "1/B").length, 5);
+});
+
+test("an unsupported index schema closes the database and shutdown blocker", async () => {
+  const saved = {
+    Zotero: global.Zotero,
+    PathUtils: global.PathUtils,
+    IOUtils: global.IOUtils,
+    ChromeUtils: global.ChromeUtils,
+  };
+  let closed = 0;
+  let removed = 0;
+  global.Zotero = {
+    DataDirectory: { dir: "/data" },
+    logError() {},
+  };
+  global.PathUtils = { join: (...parts) => parts.join("/") };
+  global.IOUtils = { makeDirectory: async () => {} };
+  global.ChromeUtils = {
+    importESModule: () => ({
+      Sqlite: {
+        shutdown: {
+          addBlocker() {},
+          removeBlocker() {
+            removed++;
+          },
+        },
+        openConnection: async () => ({
+          async execute(sql) {
+            if (sql.includes("sqlite_master"))
+              return [{ getResultByName: () => "meta" }];
+            if (sql.includes("schemaVersion"))
+              return [{ getResultByName: () => "2" }];
+            return [];
+          },
+          async executeTransaction(run) {
+            await run();
+          },
+          async close() {
+            closed++;
+          },
+        }),
+      },
+    }),
+  };
+  try {
+    const corpus = new SWCorpus();
+    await corpus._openAndLoad();
+    assert.equal(corpus.progress.phase, "error");
+    assert.equal(closed, 1);
+    assert.equal(removed, 1);
+  } finally {
+    global.Zotero = saved.Zotero;
+    global.PathUtils = saved.PathUtils;
+    global.IOUtils = saved.IOUtils;
+    global.ChromeUtils = saved.ChromeUtils;
+  }
 });
