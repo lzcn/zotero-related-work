@@ -270,8 +270,8 @@ test("sidebar ranks top K in same library, preserves rows during indexing, and n
     h.body.querySelector(".sw-status").textContent,
     /index|comput/i,
   );
-  rows[0].listeners.click();
-  rows[1].listeners.click();
+  await rows[0].listeners.click();
+  await rows[1].listeners.click();
   assert.deepEqual(h.selected, [2, 3]);
   assert.equal(
     rows[0].title,
@@ -682,6 +682,9 @@ test("bootstrap loads scripts into a scope with Zotero globals and closes SQLite
     ChromeUtils: {
       importESModule: () => ({
         AddonManager: { getAddonByID: async () => null },
+        AsyncShutdown: {
+          quitApplicationGranted: { addBlocker() {}, removeBlocker() {} },
+        },
         Sqlite: {
           shutdown: {
             addBlocker: (_name, blocker) => blockers.add(blocker),
@@ -1035,4 +1038,65 @@ test("hybrid is an internal default and ignores obsolete algorithm preferences",
   await h.SWSection.renderBody({ body: h.body, item }, true);
   assert.equal(enabled, 1);
   assert.equal(h.body.querySelectorAll(".sw-row").length, 1);
+});
+
+test("the 100-result setting survives computation and the recommendation cache", async () => {
+  const h = harness();
+  for (let index = 0; index < 81; index++) {
+    await h.corpus.upsertDoc(
+      "1/K" + index,
+      "hash" + index,
+      true,
+      new Map([
+        ["shared", 2],
+        ["topic" + index, 1],
+      ]),
+    );
+  }
+  const matches = await h.corpus.scoreTopKAsync("1/K0", 100);
+  assert.equal(matches.length, 80);
+  await h.corpus.saveRecommendations(
+    "1/K0",
+    true,
+    matches,
+    h.corpus.revision,
+    "hash0",
+  );
+  const cached = await h.corpus.getRecommendations("1/K0", true);
+  assert.equal(cached.matches.length, 80);
+  h.corpus._recommendations.set(JSON.stringify(["1/K0", true]), {
+    ...cached,
+    algorithm: 4,
+    matches: cached.matches.slice(0, 50),
+  });
+  assert.equal(await h.corpus.getRecommendations("1/K0", true), null);
+});
+
+test("recommendation navigation follows each hop and clears on manual selection", async () => {
+  const h = harness();
+  h.SWSection.register("file://test/");
+  const a = h.item(1, "Paper A");
+  const b = h.item(2, "Paper B");
+  const c = h.item(3, "Paper C");
+  const props = (item) => ({
+    body: h.body,
+    item,
+    tabType: "library",
+    setEnabled() {},
+  });
+  await h.SWSection._selectItem(h.doc, b.id, "library", a);
+  h.Zotero.hooks.onItemChange(props(b));
+  await h.SWSection.renderBody(props(b));
+  const source = h.body.querySelector(".sw-source");
+  assert.equal(source.hidden, false);
+  assert.equal(source.querySelector(".sw-title").textContent, "Paper A");
+  await source.onclick();
+  h.Zotero.hooks.onItemChange(props(a));
+  await h.SWSection.renderBody(props(a));
+  assert.equal(source.querySelector(".sw-title").textContent, "Paper B");
+  h.Zotero.hooks.onItemChange(props(c));
+  await h.SWSection.renderBody(props(c));
+  assert.equal(source.hidden, true);
+  assert.deepEqual(h.selected, [2, 1]);
+  assert.deepEqual(h.errors, []);
 });

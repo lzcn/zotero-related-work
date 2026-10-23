@@ -561,7 +561,7 @@ var SWSemantic = {
       queryKey: key,
       includeWeak,
       ...snapshot,
-      matches: matches.slice(0, 50),
+      matches: matches.slice(0, 100),
       computedAt: Date.now(),
       dirty: false,
     });
@@ -643,6 +643,7 @@ var SWSemantic = {
   },
 
   _native: null,
+  _nativeExit: Promise.resolve(),
   _nativeBuffer: "",
 
   _packageFile(name) {
@@ -697,7 +698,7 @@ var SWSemantic = {
       let valid = false;
       if (await IOUtils.exists(path))
         valid =
-          (await this._checksum(await IOUtils.read(path))) ===
+          (await IOUtils.computeHexDigest(path, "sha256")) ===
           manifest.files[name];
       if (!valid) {
         const bytes = await this._packageFile("native/" + name);
@@ -940,7 +941,11 @@ var SWSemantic = {
   _terminate(reason) {
     const native = this._native;
     this._native = null;
-    if (native) void native.kill(0).catch((error) => Zotero.logError(error));
+    if (native)
+      this._nativeExit = Promise.allSettled([
+        this._nativeExit,
+        native.kill(0).catch((error) => Zotero.logError(error)),
+      ]).then(() => undefined);
     this._worker?.terminate();
     this._worker = null;
     this._initializing = null;
@@ -957,10 +962,16 @@ var SWSemantic = {
   },
 
   stop() {
+    const initializing = this._initializing;
     this._stopped = true;
     clearTimeout(this._startupTimer);
     this._startupTimer = null;
     this.pause();
+    // Initialization may be awaiting Subprocess.call when stop clears its handle.
+    this._nativeExit = Promise.allSettled([
+      this._nativeExit,
+      initializing,
+    ]).then(() => undefined);
     this.status.state = "stopped";
   },
 };

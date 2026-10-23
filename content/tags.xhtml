@@ -1,14 +1,21 @@
 <?xml version="1.0"?>
-<html xmlns="http://www.w3.org/1999/xhtml">
-  <head>
-    <meta charset="utf-8" />
-    <title data-l10n-id="similar-works-tags-organize">Tag Manager</title>
-    <link rel="localization" href="similar-works.ftl" />
-    <link rel="stylesheet" href="chrome://global/skin/" />
-    <link rel="stylesheet" href="chrome://zotero/skin/zotero.css" />
-    <link rel="stylesheet" href="tags.css" />
-  </head>
-  <body>
+<?xml-stylesheet href="chrome://global/skin/" type="text/css"?> <?xml-stylesheet
+href="chrome://zotero/skin/zotero.css" type="text/css"?> <?xml-stylesheet
+href="chrome://zotero-platform/content/zotero.css" type="text/css"?>
+<?xml-stylesheet href="chrome://similar-works/content/tags.css"
+type="text/css"?>
+<window
+  xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
+  xmlns:html="http://www.w3.org/1999/xhtml"
+  xmlns:xul="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
+  data-l10n-id="similar-works-tags-window"
+  width="680"
+  height="560"
+>
+  <script src="chrome://zotero/content/include.js" />
+  <script src="chrome://zotero/content/customElements.js" />
+  <linkset><html:link rel="localization" href="similar-works.ftl" /></linkset>
+  <html:div id="tag-manager" xmlns="http://www.w3.org/1999/xhtml">
     <header>
       <input
         id="search"
@@ -20,7 +27,10 @@
           data-l10n-id="similar-works-tags-duplicates"
         ></span
       ></label>
-      <button id="refresh" data-l10n-id="similar-works-tags-refresh"></button>
+      <xul:button
+        id="refresh"
+        data-l10n-id="similar-works-tags-refresh"
+      ></xul:button>
     </header>
     <div class="selection-bar">
       <label
@@ -29,13 +39,37 @@
         ></span
       ></label>
       <span id="selection-count" role="status"></span>
-      <button
+      <xul:button
         id="clear-selection"
         disabled="disabled"
         data-l10n-id="similar-works-tags-clear-selection"
-      ></button>
+      ></xul:button>
     </div>
-    <main id="tags" tabindex="0"></main>
+    <main tabindex="0" id="tag-table">
+      <table
+        ><thead
+          ><tr>
+            <th scope="col" aria-sort="ascending"
+              ><button
+                id="sort-name"
+                data-l10n-id="similar-works-tags-name-column"
+              ></button
+            ></th>
+            <th scope="col" aria-sort="none"
+              ><button
+                id="sort-count"
+                data-l10n-id="similar-works-tags-count-column"
+              ></button
+            ></th>
+            <th scope="col" aria-sort="none"
+              ><button
+                id="sort-group"
+                data-l10n-id="similar-works-tags-group-column"
+              ></button
+            ></th> </tr></thead
+        ><tbody id="tags"></tbody
+      ></table>
+    </main>
     <footer>
       <label for="mode" data-l10n-id="similar-works-tags-action"></label>
       <select id="mode">
@@ -44,12 +78,16 @@
           data-l10n-id="similar-works-tags-merge-action"
         ></option>
         <option
-          value="format"
+          value="rename"
           data-l10n-id="similar-works-tags-format"
         ></option>
         <option
           value="delete"
           data-l10n-id="similar-works-tags-delete-action"
+        ></option>
+        <option
+          value="format"
+          data-l10n-id="similar-works-tags-format-action"
         ></option>
       </select>
       <label
@@ -68,15 +106,24 @@
       />
       <datalist id="selected-names"></datalist>
       <p id="preview" role="status"></p>
+      <p
+        id="collision"
+        hidden="hidden"
+        role="status"
+        data-l10n-id="similar-works-tags-collision"
+      ></p>
       <div class="actions">
-        <button id="close" data-l10n-id="similar-works-tags-close"></button>
-        <button
+        <xul:button
+          id="close"
+          data-l10n-id="similar-works-tags-close"
+        ></xul:button>
+        <xul:button
           id="merge"
           disabled="disabled"
           data-l10n-id="similar-works-tags-merge-button"
-        ></button>
+        ></xul:button>
       </div>
     </footer>
     <script src="tags.js"></script>
-  </body>
-</html>
+  </html:div>
+</window>

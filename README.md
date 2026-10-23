@@ -14,17 +14,19 @@ Find similar papers in the same Zotero library using the existing full-text cach
 
 Requires Zotero 10. Download the XPI from the [latest release](https://github.com/lzcn/zotero-related-work/releases/latest), install it through **Tools → Plugins → Install Plugin From File**, and restart Zotero.
 
+Confirmed Zotero quit cancels indexing, downloads and worker requests, waits for the native helper to exit, then drains cached-vector loading and closes the index database.
+
 ## Use
 
-Select a paper and expand **Related Work** in the sidebar. Refresh recalculates recommendations; clicking a result opens the paper. Background indexing and changed items update cached results. Recommendations may be incomplete until indexing finishes.
+Select a paper and expand **Related Work** in the sidebar. Refresh recalculates recommendations; clicking a result selects that paper and keeps Related Work open. A highlighted **From** card links back to the previous paper, including when it is absent from the recommendations. Background indexing and changed items update cached results. Recommendations may be incomplete until indexing finishes.
 
 The similarity graph is under development and is currently unavailable.
 
-**Suggested tags** combines how well a tag matches the paper with support from similar papers. Existing tags are blue; new tags are purple and marked **New**. New candidates come from repeated topic phrases in the title and abstract. Select tags and click **Add selected tags** to reuse or create them; nothing is added automatically. Tags already present are excluded, and existing tags stay within the same library. When the local model is ready, suggestions also compare tag names with the paper embedding. Frequently used tag embeddings stay cached; repeated names are encoded once.
+**Suggested tags** combines title/abstract phrases with tags from similar papers, showing up to twelve suggestions, including up to four **New** tags. The local model can rerank suggestions. Select tags and click **Add selected**; nothing is added automatically.
 
-Choose **Tools → Tag Manager** to view all tags with their item counts `(n)`. Protected tags are hidden. Select individual tags, Shift-click a range, or use **Select all**. Search and **Possible duplicates** filter the list. Possible duplicates include naming variants, singular/plural forms, reordered words, model-name aliases and close spellings; they remain suggestions until you merge them. Select all selects the filtered results. The counter shows visible tags and hidden selections; **Clear selection** clears every selected tag. Cmd/Ctrl+A also works while the list is focused.
+Choose **Tools → Tag Manager** to search tags and sort by clicking **Name**, **Items**, or **Match**. **Possible duplicates** includes name variants, plurals, common terminology aliases, explicit abbreviations and minor spelling differences. Match groups and reasons are shown for review; related topics and model versions remain distinct. Select all applies to filtered rows; the counter includes hidden selections.
 
-Choose **Merge** (the default), **Rename**, or **Delete**. Merge combines selected tags into one name. Rename edits a single name or formats each selected tag separately; only matching destinations merge. Delete removes selected tags from items, keeping the items and notes. Review the preview, then click the action button. Starting an operation locks the current selection without rebuilding the list. Changes use Zotero's native tag operations.
+**Merge** combines two or more selected tags into the chosen name. **Rename** edits one tag. **Format names** formats selected names separately and previews collisions. **Delete** removes selected tags from items without deleting papers or notes. Review the affected-item count before applying. Changes use Zotero’s native tag operations.
 
 Tag names use spaces. In Settings, choose **Sentence case** (default) or **Title Case**, and optionally add a leading `#`. Known model names retain their official spelling; existing acronyms, mixed-case names such as `PyTorch`, and hyphenated words such as `co-attention` are preserved. The local dictionary in `data/tag-terms.json` combines model names from Hugging Face Transformers with maintained research terms. It is bundled with the plugin; naming never uses the network. Colored tags are protected by default. Add other names to **Excluded tags**, one per line; their naming variants are protected too.
 
@@ -52,7 +54,7 @@ Only the current storage format is supported. Startup rejects other database sch
 
 Use Node.js 22.13+ (22.x) or 24+. Run `npm ci`, then `npm run check`.
 
-- `npm run build`: reuse valid output when inputs have not changed. Run `npm run build` in the parent workspace to build and install all three plugins.
+- `npm run build`: reuse valid output when inputs have not changed. Run `make` in the parent workspace to build all three plugins.
 - `npm run clean`: remove generated build output; retain downloaded tools, dependencies, research data and releases.
 - `npm run build:force`: rebuild from scratch.
 - `npm run check`: formatting, lint, tests and type checking; reuse valid XPI output.

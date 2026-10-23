@@ -565,6 +565,35 @@ test("pause immediately kills native inference and rejects worker requests", asy
   assert.equal(semantic._native, null);
 });
 
+test("native process termination remains awaitable after its handle is cleared", async () => {
+  const { semantic } = fixture();
+  let release;
+  semantic._native = {
+    kill: () =>
+      new Promise((resolve) => {
+        release = resolve;
+      }),
+  };
+  let finishInitialization;
+  semantic._initializing = new Promise((resolve) => {
+    finishInitialization = resolve;
+  });
+  semantic.stop();
+  let exited = false;
+  const stopping = semantic._nativeExit.then(() => {
+    exited = true;
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(exited, false);
+  assert.equal(semantic._native, null);
+  release();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(exited, false);
+  finishInitialization();
+  await stopping;
+  assert.equal(exited, true);
+});
+
 test("native embeddings validate dimensions and stop between cancelled chunks", async () => {
   const { semantic } = fixture();
   semantic._enabled = true;

@@ -13,7 +13,13 @@ var SW_CSS = `
    must grow with their title and metadata, including in XUL main windows. */
 .sw-list > button.sw-row { appearance: none; box-sizing: border-box; height: auto;
 	max-height: none; min-height: 0; min-width: 0; margin: 0; flex-shrink: 0; white-space: normal; }
-.sw-row:focus-visible { outline: 2px solid var(--accent-blue, #3874d8); }
+.sw-source { display: block; box-sizing: border-box; width: 100%; height: auto; max-height: none;
+  margin: 4px 0 8px; padding: 8px; text-align: start; white-space: normal;
+  border: 1px solid var(--accent-blue, #3874d8); border-inline-start-width: 3px;
+  border-radius: 6px; background: light-dark(#edf4ff, #24354d); color: inherit; cursor: pointer; }
+.sw-source[hidden] { display: none; }
+.sw-source-label { display: block; color: var(--accent-blue, #3874d8); font-size: 11px; margin-bottom: 3px; }
+.sw-source:focus-visible, .sw-row:focus-visible { outline: 2px solid var(--accent-blue, #3874d8); }
 .sw-rank { min-width: 14px; padding-top: 3px; font-size: 11px; color: var(--text-secondary, gray); }
 .sw-row:hover { background: var(--fill-quinary, rgba(127, 127, 127, 0.12)); }
 .sw-row:active { background: var(--fill-quaternary, rgba(127, 127, 127, 0.2)); }
@@ -32,8 +38,8 @@ var SW_CSS = `
 	background: var(--fill-secondary, rgba(127, 127, 127, 0.25)); overflow: hidden; }
 .sw-bar { height: 100%; border-radius: 2px; background: var(--accent-blue, #3874d8); }
 .sw-tags { contain: inline-size; min-width: 0; margin: 4px 0 10px; padding: 8px; border-bottom: 1px solid var(--fill-secondary, rgba(128,128,128,.2)); }
-.sw-tag-existing { color: light-dark(#1762ad, #80b8ee); }
 .sw-tag-new { color: light-dark(#7540a4, #cba2f0); }
+.sw-tag-existing { color: light-dark(#1762ad, #80b8ee); }
 .sw-tags[hidden] { display: none; }
 .sw-tag-heading { display: flex; gap: 8px; align-items: center; justify-content: space-between; margin-bottom: 6px; }
 .sw-tag-heading strong { font-size: 12px; }
@@ -47,6 +53,7 @@ var SW_CSS = `
 `;
 
 var SWSection = {
+  _navigation: new WeakMap(),
   _rootURI: null,
   _registered: null,
   _active: [],
@@ -77,6 +84,17 @@ var SWSection = {
       },
       onItemChange: (props) => {
         var { body, item, setEnabled } = props;
+        const win = body.ownerDocument.defaultView;
+        const navigation = self._navigation.get(win);
+        if (navigation && item?.id !== navigation.targetID) {
+          self._navigation.delete(win);
+          const source = body.querySelector(".sw-source");
+          if (source) {
+            source.hidden = true;
+            source.replaceChildren();
+            source.onclick = null;
+          }
+        }
         if (!item || body._swSelectionKey !== SWIndexer.docKey(item)) {
           body._swToken = (body._swToken || 0) + 1;
         }
@@ -165,7 +183,11 @@ var SWSection = {
     var tags = doc.createElementNS("http://www.w3.org/1999/xhtml", "div");
     tags.className = "sw-tags";
     tags.hidden = true;
-    body.replaceChildren(status, progress, tags, list);
+    var source = doc.createElementNS("http://www.w3.org/1999/xhtml", "button");
+    source.type = "button";
+    source.className = "sw-source";
+    source.hidden = true;
+    body.replaceChildren(source, status, progress, tags, list);
   },
 
   async fmt(doc, id, args, fallback) {
@@ -268,6 +290,7 @@ var SWSection = {
       if (setSectionSummary) setSectionSummary("");
     }
 
+    this._presentSource(props);
     var sectionEl = body.closest ? body.closest("collapsible-section") : null;
     if (sectionEl && sectionEl.open === false) {
       body._swPending = true;
@@ -414,13 +437,22 @@ var SWSection = {
     this.setStatus(body, computingText, false);
     body.setAttribute("aria-busy", "true");
     progressBar.hidden = !!cached && !compute;
+    var queryDoc = corpus.docs.get(docKey);
+    if (!queryDoc) {
+      await show(
+        "similar-works-no-text",
+        null,
+        "No analyzable full text or abstract for this item",
+      );
+      return;
+    }
     var epoch = corpus.search.epoch;
     var revision = corpus.revision;
-    var queryHash = corpus.docs.get(docKey).hash;
+    var queryHash = queryDoc.hash;
     var lastProgress = 0;
     var matches = await corpus.scoreTopKAsync(
       docKey,
-      50,
+      100,
       (key, d) =>
         key.startsWith(target.libraryID + "/") && (includeWeak || !d.weak),
       () =>
@@ -490,7 +522,7 @@ var SWSection = {
     SWSemantic.enqueue(key, true);
     const result = await SWSemantic.recommend(
       key,
-      50,
+      100,
       (candidate, doc) =>
         candidate.startsWith(target.libraryID + "/") &&
         (includeWeak || !doc.weak),
@@ -635,7 +667,7 @@ var SWSection = {
       let itemId = r.item.id;
       let srcTabType = tabType;
       row.addEventListener("click", () =>
-        this._selectItem(doc, itemId, srcTabType),
+        this._selectItem(doc, itemId, srcTabType, props.item),
       );
       renderedRows.push(row);
     }
@@ -755,7 +787,7 @@ var SWSection = {
         doc,
         "similar-works-tags-empty",
         null,
-        "No new tags suggested",
+        "No suggested tags",
       );
     if (suggestions.length) content.push(apply);
     content.push(message);
@@ -769,12 +801,23 @@ var SWSection = {
         const count = await SWTags.addSelected(
           target.id,
           target.libraryID,
-          suggestions.filter((suggestion) =>
-            controls.some(
-              (input) => input.checked && input.value === suggestion.name,
-            ),
-          ),
+          suggestions
+            .filter((suggestion) =>
+              controls.some(
+                (input) => input.checked && input.value === suggestion.name,
+              ),
+            )
+            .map((suggestion) => suggestion.name),
           active,
+          suggestions
+            .filter(
+              (suggestion) =>
+                suggestion.isNew &&
+                controls.some(
+                  (input) => input.checked && input.value === suggestion.name,
+                ),
+            )
+            .map((suggestion) => suggestion.name),
         );
         if (!active()) return;
         body._swTagSignature = null;
@@ -847,15 +890,54 @@ var SWSection = {
     return out;
   },
 
-  _selectItem(doc, itemId, tabType) {
+  _presentSource(props) {
+    const { body, item, tabType } = props;
+    const doc = body.ownerDocument;
+    const source = body.querySelector(".sw-source");
+    const navigation = this._navigation.get(doc.defaultView);
+    source.replaceChildren();
+    source.hidden = true;
+    source.onclick = null;
+    if (navigation?.targetID !== item.id || navigation.source.deleted) return;
+    const label = doc.createElementNS("http://www.w3.org/1999/xhtml", "span");
+    label.className = "sw-source-label";
+    label.setAttribute("data-l10n-id", "similar-works-source");
+    const title = doc.createElementNS("http://www.w3.org/1999/xhtml", "span");
+    title.className = "sw-title";
+    title.textContent =
+      navigation.source.getField("title") ||
+      navigation.source.getDisplayTitle();
+    source.appendChild(label);
+    source.appendChild(title);
+    source.hidden = false;
+    source.onclick = () =>
+      this._selectItem(doc, navigation.source.id, tabType, item);
+  },
+
+  async _selectItem(doc, itemId, tabType, sourceItem) {
     try {
-      var win = doc.defaultView;
-      if (tabType !== "library" && win && win.Zotero_Tabs) {
+      if (this._stopped) return;
+      const source = await SWIndexer.resolveDocItem(sourceItem);
+      if (!source || this._stopped) return;
+      const win = doc.defaultView;
+      const zp = win?.ZoteroPane || Zotero.getActiveZoteroPane();
+      if (!zp) return;
+      const targetDoc = zp.document || doc;
+      const targetWin = targetDoc.defaultView;
+      const navigation = { source, targetID: itemId };
+      this._navigation.set(targetWin, navigation);
+      if (tabType !== "library" && win?.Zotero_Tabs)
         win.Zotero_Tabs.select("zotero-pane");
-      }
-      var zp = win?.ZoteroPane || Zotero.getActiveZoteroPane();
-      if (zp) {
-        zp.selectItem(itemId);
+      await zp.selectItem(itemId);
+      if (this._stopped || this._navigation.get(targetWin) !== navigation)
+        return;
+      const details = targetDoc
+        .getElementById?.("zotero-item-pane")
+        ?.querySelector("item-details");
+      const section = details?.getPane(this._registered);
+      if (section) {
+        section.querySelector("collapsible-section").open = true;
+        await details.scrollToPane(this._registered, "instant");
       }
     } catch (e) {
       Zotero.logError(e);
@@ -913,6 +995,7 @@ var SWSection = {
   },
 
   removeWindow(win) {
+    this._navigation.delete(win);
     this._tagMenus.get(win)?.();
     this._tagMenus.delete(win);
     delete win.similarWorksStatus;
@@ -932,6 +1015,7 @@ var SWSection = {
 
   shutdown() {
     this._stopped = true;
+    this._navigation = new WeakMap();
     clearTimeout(this._tagTimer);
     this._tagTimer = null;
     if (this._tagObserver)

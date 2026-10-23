@@ -444,37 +444,30 @@ test("damaged fingerprint rows are removed instead of blocking the whole index",
   const corpus = new SWCorpus();
   const counts = SWSearch.encodeCounts(new Map([[123, 4]]));
   const damaged = SWSearch.encodeCounts(new Map([[456, 2]])).slice(0, -1);
+  const row = (key, values = {}) => ({
+    getResultByName: (name) =>
+      ({
+        key,
+        hash: key.slice(-1).toLowerCase(),
+        weak: 0,
+        counts,
+        signature: null,
+        epoch: 0,
+        simhash: null,
+        ...values,
+      })[name],
+  });
   const rows = [
-    {
-      getResultByName: (name) =>
-        ({
-          key: "1/A",
-          hash: "a",
-          weak: 0,
-          counts,
-          signature: null,
-          epoch: 0,
-          simhash: null,
-        })[name],
-    },
-    {
-      getResultByName: (name) =>
-        ({
-          key: "1/B",
-          hash: "b",
-          weak: 0,
-          counts: damaged,
-          signature: null,
-          epoch: 0,
-          simhash: null,
-        })[name],
-    },
+    row("1/A"),
+    row("1/B", { counts: damaged }),
+    row("1/C", { signature: new Uint8Array(5) }),
+    row("1/D", { simhash: new Uint8Array(4) }),
   ];
   const deletes = [];
   let page = 0;
   corpus._db = {
     async execute(sql, params) {
-      if (sql.startsWith("SELECT COUNT")) return [{ getResultByName: () => 2 }];
+      if (sql.startsWith("SELECT COUNT")) return [{ getResultByName: () => 4 }];
       if (sql.startsWith("SELECT d.key")) return page++ ? [] : rows;
       if (sql.startsWith("SELECT counts"))
         return [{ getResultByName: () => counts }];
@@ -490,7 +483,8 @@ test("damaged fingerprint rows are removed instead of blocking the whole index",
   await corpus._loadAll();
   assert.equal(corpus.progress.phase, "ready");
   assert.deepEqual([...corpus.docs.keys()], ["1/A"]);
-  assert.equal(deletes.filter(([, params]) => params[0] === "1/B").length, 5);
+  for (const key of ["1/B", "1/C", "1/D"])
+    assert.equal(deletes.filter(([, params]) => params[0] === key).length, 5);
 });
 
 test("an unsupported index schema closes the database and shutdown blocker", async () => {

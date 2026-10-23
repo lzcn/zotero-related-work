@@ -24,6 +24,7 @@ function fixture({
     removed: [],
     errors: [],
     observers: new Map(),
+    blockers: new Map(),
     stops: 0,
   };
   const corpus = {
@@ -79,7 +80,16 @@ function fixture({
         },
       },
     },
-    ChromeUtils: {},
+    ChromeUtils: {
+      importESModule: () => ({
+        AsyncShutdown: {
+          quitApplicationGranted: {
+            addBlocker: (name, callback) => state.blockers.set(callback, name),
+            removeBlocker: (callback) => state.blockers.delete(callback),
+          },
+        },
+      }),
+    },
     IOUtils: { exists: async () => false },
     PathUtils: { join: (...parts) => parts.join("/") },
     TextDecoder,
@@ -216,5 +226,54 @@ test("shutdown waits for cached vector loading before closing storage", async ()
     finish();
     await stopping;
     assert.equal(h.state.closed, 1);
+  }
+});
+
+test("confirmed quit drains vector loading before closing storage and unregisters its barrier", async () => {
+  const h = fixture();
+  await h.context.startup(h.data);
+  let finish;
+  h.context.SWScope.SWSemantic = {
+    stop() {},
+    _loaded: new Promise((resolve) => {
+      finish = resolve;
+    }),
+  };
+  const [quit] = h.state.blockers.keys();
+  const stopping = quit();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(h.state.closed, 0);
+  finish();
+  await stopping;
+  assert.equal(h.state.closed, 1);
+  assert.equal(h.state.blockers.size, 0);
+  await quit();
+  assert.equal(h.state.closed, 1);
+});
+
+test("a throwing stop callback cannot skip the remaining confirmed-quit cleanup", async () => {
+  for (const [owner, method] of [
+    ["SWTags", "stop"],
+    ["SWGraph", "stop"],
+    ["SWSection", "shutdown"],
+    ["SWSemantic", "stop"],
+    ["SWIndexer", "requestStop"],
+  ]) {
+    const h = fixture();
+    await h.context.startup(h.data);
+    const scope = h.context.SWScope;
+    scope[owner] ||= {};
+    scope[owner][method] = () => {
+      throw new Error("Fixture stop failure");
+    };
+    const [quit] = h.state.blockers.keys();
+    await quit();
+    assert.equal(h.state.closed, 1);
+    assert.equal(h.state.blockers.size, 0);
+    assert.ok(
+      h.state.errors.some((error) =>
+        /Fixture stop failure/.test(error.message),
+      ),
+    );
   }
 });

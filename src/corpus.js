@@ -165,17 +165,16 @@ var SWCorpus = class {
     var total = countRows.length ? countRows[0].getResultByName("c") : 0;
     this.progress = { phase: "loading", done: 0, total: total };
     var rebuild = !this.search.epoch;
-    var offset = 0;
+    var lastKey = "";
+    var done = 0;
     var chunk = 100;
     var sliceStarted = Date.now();
     var damaged = [];
     var damagedError = null;
     while (!this._stopped) {
       var rows = await this._db.execute(
-        "SELECT d.key, d.hash, d.weak, f.counts, f.signature, f.epoch, f.simhash FROM docs d LEFT JOIN fingerprints f ON f.key = d.key ORDER BY d.key LIMIT " +
-          chunk +
-          " OFFSET " +
-          offset,
+        "SELECT d.key, d.hash, d.weak, f.counts, f.signature, f.epoch, f.simhash FROM docs d LEFT JOIN fingerprints f ON f.key = d.key WHERE d.key > ? ORDER BY d.key LIMIT ?",
+        [lastKey, chunk],
       );
       if (!rows.length) {
         break;
@@ -183,11 +182,22 @@ var SWCorpus = class {
       for (var row of rows) {
         if (this._stopped) return;
         var key = row.getResultByName("key");
-        var tf;
+        lastKey = key;
+        var counts, signature, simhash;
         try {
-          var counts = row.getResultByName("counts");
+          counts = row.getResultByName("counts");
           if (!counts) throw new Error("Missing stored feature counts");
-          tf = SWSearch.decodeCounts(counts);
+          var tf = SWSearch.decodeCounts(counts);
+          signature =
+            row.getResultByName("epoch") === this.search.epoch
+              ? row.getResultByName("signature")
+              : null;
+          if (signature) SWSearch.decodeSignature(signature);
+          var storedSimhash = row.getResultByName("simhash");
+          if (storedSimhash) {
+            SWSearch.decodeSimhash(storedSimhash);
+            simhash = storedSimhash;
+          } else simhash = null;
         } catch (e) {
           // The index is rebuildable. Drop this row and let the library scan
           // recreate it instead of making every cached document unreadable.
@@ -199,24 +209,18 @@ var SWCorpus = class {
           hash: row.getResultByName("hash"),
           weak: !!parseInt(row.getResultByName("weak")),
           tf: tf,
-          signature:
-            row.getResultByName("epoch") === this.search.epoch
-              ? row.getResultByName("signature")
-              : null,
-          simhash: row.getResultByName("simhash")
-            ? SWSearch.decodeSimhash(row.getResultByName("simhash"))
-            : null,
+          signature: signature,
+          simhash: simhash,
         };
         if (!doc.signature) rebuild = true;
         this._memInsert(key, doc, false);
-        if (counts) this.search.docs.get(key).counts = null;
         if (Date.now() - sliceStarted >= 6) {
           await swYield(5);
           sliceStarted = Date.now();
         }
       }
-      offset += rows.length;
-      this.progress = { phase: "loading", done: offset, total: total };
+      done += rows.length;
+      this.progress = { phase: "loading", done: done, total: total };
       await swYield(5);
     }
     if (damaged.length) {
@@ -256,7 +260,12 @@ var SWCorpus = class {
       );
       if (this._stopped) return;
       await this._persistFingerprints();
-    } else this.search.changes = this._loadedChanges;
+    } else {
+      this.search.changes = this._loadedChanges;
+      // Keep encoded counts through a rebuild so its per-document reads stay in
+      // memory; release them once load-time validation is complete.
+      for (const doc of this.search.docs.values()) doc.counts = null;
+    }
     this.progress = { phase: "ready", done: this.n, total: this.n };
     void this._maintainEpoch();
   }
@@ -373,12 +382,17 @@ var SWCorpus = class {
           }
         } finally {
           this._epochPending = false;
+          // A rebuild aborts when documents change; retry once the queue
+          // reaches a stable point instead of waiting for the next edit.
+          if (!this._stopped && this.search.needsEpoch())
+            void work().catch(report);
         }
       }, -1);
     };
-    void work().catch((error) => {
+    const report = (error) => {
       if (typeof Zotero !== "undefined") Zotero.logError(error);
-    });
+    };
+    void work().catch(report);
   }
 
   upsertDoc(key, hash, weak, tf, priority = 0) {
@@ -600,14 +614,14 @@ var SWCorpus = class {
   _validRecommendations(cached) {
     return (
       cached &&
-      cached.algorithm === 4 &&
+      cached.algorithm === 5 &&
       typeof cached.queryHash === "string" &&
       Number.isInteger(cached.epoch) &&
       cached.epoch >= 0 &&
       Number.isFinite(cached.computedAt) &&
       Number.isFinite(cached.revision) &&
       Array.isArray(cached.matches) &&
-      cached.matches.length <= 50 &&
+      cached.matches.length <= 100 &&
       cached.matches.every(
         (m) =>
           m &&
@@ -646,12 +660,12 @@ var SWCorpus = class {
       return;
     var cacheKey = JSON.stringify([queryKey, includeWeak]);
     var cached = {
-      algorithm: 4,
+      algorithm: 5,
       epoch: this.search.epoch,
       revision,
       queryHash,
       computedAt: Date.now(),
-      matches: matches.slice(0, 50),
+      matches: matches.slice(0, 100),
     };
     this._recommendations.set(cacheKey, cached);
     while (this._recommendations.size > 1000)
@@ -702,7 +716,10 @@ var SWCorpus = class {
     }
     const changedLibrary = changedKey.split("/")[0];
     let sliceStarted = Date.now();
-    for (const [cacheKey, cached] of this._recommendations) {
+    // Iterate over a snapshot: foreground saves can reorder or replace entries
+    // while this background pass yields, and stale entries must not be written.
+    for (const [cacheKey, cached] of [...this._recommendations]) {
+      if (this._recommendations.get(cacheKey) !== cached) continue;
       // Comparing against the serialized form is only needed to decide whether
       // a persistence write is required, so skip it entirely without a database.
       const original = this._db ? JSON.stringify(cached) : null;
@@ -719,33 +736,22 @@ var SWCorpus = class {
         if (before) cached.dirty = true; // Deletion can expose an unknown next neighbor.
         if (changed && (includeWeak || !changed.weak)) {
           const score = this.search.similarity(query, changed);
-          const duplicate =
-            !query.weak &&
-            !changed.weak &&
-            query.length >= 100 &&
-            changed.length >= 100 &&
-            SWSearch.distance(query.simhash, changed.simhash) <= 3 &&
-            SWSearch.cosine(query.vector, changed.vector) >= 0.95;
-          const duplicateNeighbor =
-            !changed.weak &&
-            changed.length >= 100 &&
-            matches.some((m) => {
-              const neighbor = this.search.docs.get(m.key);
-              return (
-                neighbor &&
-                !neighbor.weak &&
-                neighbor.length >= 100 &&
-                SWSearch.distance(neighbor.simhash, changed.simhash) <= 3 &&
-                SWSearch.cosine(neighbor.vector, changed.vector) >= 0.95
-              );
-            });
+          const duplicate = SWSearch.isDuplicate(query, changed);
+          const duplicateNeighbor = matches.some((m) => {
+            const neighbor = this.search.docs.get(m.key);
+            return neighbor && SWSearch.isDuplicate(neighbor, changed);
+          });
           if (score > 0 && !duplicate && !duplicateNeighbor)
             matches.push({ key: changedKey, score, weak: changed.weak });
         }
         matches.sort((a, b) => b.score - a.score || a.key.localeCompare(b.key));
-        cached.matches = matches.slice(0, 50);
+        cached.matches = matches.slice(0, 100);
       }
-      if (this._db && original !== JSON.stringify(cached))
+      if (
+        this._db &&
+        this._recommendations.get(cacheKey) === cached &&
+        original !== JSON.stringify(cached)
+      )
         await this._db.execute(
           "UPDATE recommendations SET payload = ? WHERE cacheKey = ?",
           [JSON.stringify(cached), cacheKey],
@@ -820,7 +826,7 @@ var SWCorpus = class {
     onSnapshot(this.revision, this.docs.get(queryKey)?.hash, this.search.epoch);
     return this.search.search(
       queryKey,
-      Math.min(50, k),
+      Math.min(100, k),
       filter,
       () => this._stopped || cancelled(),
       () => swYield(Math.min(5, Math.max(0, restMs))),

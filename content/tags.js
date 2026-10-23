@@ -21,7 +21,9 @@
   let names = [],
     counts = new Map(),
     visible = [],
-    groups = new Set(),
+    groups = new Map(),
+    sortBy = "name",
+    ascending = true,
     revision = 0,
     renderRevision = 0,
     loadRevision = 0,
@@ -54,7 +56,7 @@
   );
   document
     .getElementById("close")
-    .addEventListener("click", () => window.close());
+    .addEventListener("command", () => window.close());
 
   function updateSelection() {
     const available = visible;
@@ -87,14 +89,16 @@
     updateSelection();
     const merging = mode.value === "merge",
       deleting = mode.value === "delete",
-      singleRename = mode.value === "format" && selected.size === 1;
+      singleRename = mode.value === "rename" && selected.size === 1;
     document.l10n.setAttributes(
       apply,
       deleting
         ? "similar-works-tags-delete-button"
         : merging
           ? "similar-works-tags-merge-button"
-          : "similar-works-tags-rename-button",
+          : mode.value === "format"
+            ? "similar-works-tags-format-button"
+            : "similar-works-tags-rename-button",
     );
     apply.dataset.action = mode.value;
     target.hidden = document.getElementById("target-label").hidden = !(
@@ -104,12 +108,24 @@
     const options = document.getElementById("selected-names");
     options.replaceChildren();
     for (const name of selected) {
-      const option = document.createElement("option");
+      const option = document.createElementNS(
+        "http://www.w3.org/1999/xhtml",
+        "option",
+      );
       option.value = option.textContent = name;
       options.appendChild(option);
     }
-    target.value = api.formatName([...selected][0] || "");
-    if (!selected.size) {
+    target.value = merging
+      ? [...selected].sort(
+          (a, b) => (counts.get(b) || 0) - (counts.get(a) || 0),
+        )[0] || ""
+      : api.formatName([...selected][0] || "");
+    updateCollision();
+    if (
+      !selected.size ||
+      (merging && selected.size < 2) ||
+      (mode.value === "rename" && selected.size !== 1)
+    ) {
       preview.textContent = "";
       return;
     }
@@ -165,28 +181,65 @@
         (name.toLowerCase().includes(query) ||
           (!!words && api.words(name).join(" ").toLowerCase().includes(words))),
     );
+    visible.sort((a, b) => {
+      const order =
+        sortBy === "count"
+          ? (counts.get(a) || 0) - (counts.get(b) || 0)
+          : sortBy === "group"
+            ? (groups.get(a) ?? Infinity) - (groups.get(b) ?? Infinity)
+            : a.localeCompare(b, undefined, {
+                numeric: true,
+                sensitivity: "base",
+              });
+      return (ascending ? 1 : -1) * (order || a.localeCompare(b));
+    });
     anchor = null;
     list.replaceChildren();
+    let previousGroup = null;
     // Every tag is reachable; yield between batches instead of truncating the list.
     for (let offset = 0; offset < visible.length; offset += 100) {
       if (!active() || token !== renderRevision) return;
       const fragment = document.createDocumentFragment();
       for (const name of visible.slice(offset, offset + 100)) {
-        const label = document.createElement("label");
-        label.className = "tag";
-        const input = document.createElement("input");
+        const label = document.createElementNS(
+          "http://www.w3.org/1999/xhtml",
+          "label",
+        );
+        const row = document.createElementNS(
+          "http://www.w3.org/1999/xhtml",
+          "tr",
+        );
+        row.className = "tag";
+        if (
+          sortBy === "group" &&
+          previousGroup !== null &&
+          previousGroup !== groups.get(name)
+        )
+          row.classList.add("tag-group-start");
+        previousGroup = groups.get(name);
+        const input = document.createElementNS(
+          "http://www.w3.org/1999/xhtml",
+          "input",
+        );
         input.type = "checkbox";
         input.value = name;
         input.checked = selected.has(name);
         input.disabled = busy;
-        const text = document.createElement("span");
+        const text = document.createElementNS(
+          "http://www.w3.org/1999/xhtml",
+          "span",
+        );
         text.textContent = name;
-        const count = document.createElement("small");
+        const count = document.createElementNS(
+          "http://www.w3.org/1999/xhtml",
+          "td",
+        );
         count.className = "tag-count";
-        count.textContent =
-          " (" + (counts.get(name) || 0).toLocaleString() + ")";
-        text.appendChild(count);
-        const hint = document.createElement("small");
+        count.textContent = (counts.get(name) || 0).toLocaleString();
+        const hint = document.createElementNS(
+          "http://www.w3.org/1999/xhtml",
+          "td",
+        );
         const normalized = mode.value === "format" ? api.formatName(name) : "";
         if (normalized && normalized !== name)
           hint.textContent = "→ " + normalized;
@@ -209,16 +262,44 @@
           else selected.delete(name);
           void selectionChanged().catch(report);
         });
-        label.append(input, text, hint);
-        fragment.appendChild(label);
+        if (!normalized && groups.has(name)) {
+          const group = groups.get(name);
+          const peer = names.find(
+            (other) => other !== name && groups.get(other) === group,
+          );
+          hint.textContent =
+            group +
+            1 +
+            " · " +
+            (await fmt(
+              "similar-works-tags-match-" + api.duplicateReason(name, peer),
+            ));
+        }
+        label.append(input, text);
+        const cell = document.createElementNS(
+          "http://www.w3.org/1999/xhtml",
+          "td",
+        );
+        cell.appendChild(label);
+        row.append(cell, count, hint);
+        fragment.appendChild(row);
       }
       if (!active() || token !== renderRevision) return;
       list.appendChild(fragment);
       await new Promise((resolve) => window.setTimeout(resolve, 0));
     }
     if (!visible.length) {
-      const empty = document.createElement("p");
-      empty.textContent = await fmt("similar-works-tags-no-matches");
+      const empty = document.createElementNS(
+        "http://www.w3.org/1999/xhtml",
+        "tr",
+      );
+      const emptyCell = document.createElementNS(
+        "http://www.w3.org/1999/xhtml",
+        "td",
+      );
+      emptyCell.colSpan = 3;
+      empty.appendChild(emptyCell);
+      emptyCell.textContent = await fmt("similar-works-tags-no-matches");
       if (active() && token === renderRevision) list.appendChild(empty);
     }
     updateSelection();
@@ -235,7 +316,11 @@
     counts = usage;
     for (const name of selected)
       if (!names.includes(name)) selected.delete(name);
-    groups = new Set(api.duplicateGroups(names).flat());
+    groups = new Map(
+      api
+        .duplicateGroups(names)
+        .flatMap((group, index) => group.map((name) => [name, index])),
+    );
     await render();
     if (active() && token === loadRevision) await selectionChanged();
   }
@@ -247,27 +332,34 @@
     }
     void selectionChanged().catch(report);
   }
-  clearSelection.addEventListener("click", () => {
+  clearSelection.addEventListener("command", () => {
     if (busy) return;
     selected.clear();
     void selectionChanged().catch(report);
   });
   selectAll.addEventListener("change", () => chooseVisible(selectAll.checked));
-  list.addEventListener("keydown", (event) => {
+  document.getElementById("tag-table").addEventListener("keydown", (event) => {
     if (accel(event) && event.key.toLowerCase() === "a") {
       event.preventDefault();
       chooseVisible(true);
     }
   });
+  function updateCollision() {
+    const name = target.value.trim();
+    document.getElementById("collision").hidden =
+      target.hidden || !name || selected.has(name) || !names.includes(name);
+  }
   target.addEventListener("input", () => {
+    updateCollision();
     apply.disabled =
       busy ||
       !previewReady ||
       !selected.size ||
       !target.value.trim() ||
-      (mode.value === "format" && target.value === [...selected][0]);
+      (mode.value === "rename" && target.value === [...selected][0]) ||
+      (mode.value === "merge" && selected.size < 2);
   });
-  refresh.addEventListener("click", () => {
+  refresh.addEventListener("command", () => {
     if (busy) return;
     void load().catch(report);
   });
@@ -303,19 +395,37 @@
       } else window.close();
     }
   });
-  duplicates.addEventListener("change", () => {
+  function setSort(key) {
+    if (busy) return;
+    ascending = sortBy === key ? !ascending : key !== "count";
+    sortBy = key;
+    for (const column of ["name", "count", "group"])
+      document
+        .getElementById("sort-" + column)
+        .parentElement.setAttribute(
+          "aria-sort",
+          column === sortBy ? (ascending ? "ascending" : "descending") : "none",
+        );
     void render().catch(report);
+  }
+  for (const column of ["name", "count", "group"])
+    document
+      .getElementById("sort-" + column)
+      .addEventListener("click", () => setSort(column));
+  duplicates.addEventListener("change", () => {
+    sortBy = "";
+    setSort(duplicates.checked ? "group" : "name");
   });
   mode.addEventListener("change", () => {
     void selectionChanged().catch(report);
     void render().catch(report);
   });
-  apply.addEventListener("click", async () => {
+  apply.addEventListener("command", async () => {
     if (busy || apply.disabled) return;
     const currentPlan = plan,
       merging = mode.value === "merge",
       deleting = mode.value === "delete",
-      singleRename = mode.value === "format" && selected.size === 1,
+      singleRename = mode.value === "rename" && selected.size === 1,
       keep = api.normalizeName(target.value);
     busy = true;
     revision++;

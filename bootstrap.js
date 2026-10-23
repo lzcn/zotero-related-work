@@ -18,6 +18,8 @@ var SWGeneration = 0;
 var SWStartupPromise = null;
 var SWShutdownPromise = null;
 var SWQuitObserver = null;
+var SWQuitClient = null;
+var SWQuitPromise = null;
 var SWCancelReadiness = null;
 
 function stopWork() {
@@ -46,6 +48,18 @@ function removeQuitObserver() {
   SWQuitObserver = null;
 }
 
+function removeQuitBlocker() {
+  SWQuitClient?.removeBlocker(finishQuit);
+  SWQuitClient = null;
+}
+
+function finishQuit() {
+  if (SWQuitPromise) return SWQuitPromise;
+  stopWork();
+  SWQuitPromise = releaseResources(true);
+  return SWQuitPromise;
+}
+
 async function startup(data) {
   if (SWStartupPromise) return SWStartupPromise;
   var token = ++SWGeneration;
@@ -71,12 +85,17 @@ async function start({ id, version, rootURI }, token) {
       Services.scriptloader.loadSubScript(rootURI + "src/" + file, SWScope);
     SWQuitObserver = {
       observe() {
-        stopWork();
-        void SWScope.SWIndexer?.corpus
-          ?.close()
-          .catch((e) => Zotero.logError(e));
+        void finishQuit().catch((error) => Zotero.logError(error));
       },
     };
+    const { AsyncShutdown } = ChromeUtils.importESModule(
+      "resource://gre/modules/AsyncShutdown.sys.mjs",
+    );
+    SWQuitClient = AsyncShutdown.quitApplicationGranted;
+    SWQuitClient.addBlocker(
+      "Related Work: stop indexing and close storage",
+      finishQuit,
+    );
     Services.obs?.addObserver(SWQuitObserver, "quit-application-granted");
     await Promise.race([
       Zotero.initializationPromise,
@@ -124,6 +143,8 @@ async function releaseResources(appShutdown = false) {
     () => SWScope.SWTags?.finishWrites(),
     ...(appShutdown ? [] : [() => SWScope.SWSemantic?._running]),
     () => SWScope.SWSemantic?._loaded,
+    () => SWScope.SWSemantic?._nativeExit,
+    () => SWScope.SWIndexer?._statusWrite,
     ...(appShutdown
       ? []
       : [
@@ -132,6 +153,7 @@ async function releaseResources(appShutdown = false) {
         ]),
     () => SWScope.SWIndexer?.corpus?.close(),
     releaseChrome,
+    removeQuitBlocker,
   ];
   for (const action of actions) {
     try {
@@ -151,7 +173,8 @@ async function shutdown(data, reason) {
   SWShutdownPromise = (async () => {
     // Application quit must not wait for Zotero startup or library scans.
     if (!appShutdown) await SWStartupPromise;
-    await releaseResources(appShutdown);
+    if (SWQuitPromise) await SWQuitPromise;
+    else await releaseResources(appShutdown);
   })();
   return SWShutdownPromise;
 }

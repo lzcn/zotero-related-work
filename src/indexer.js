@@ -212,18 +212,24 @@ var SWIndexer = {
       var scanned = 0;
       for (var lib of Zotero.Libraries.getAll()) {
         var ids = await Zotero.Items.getAll(lib.id, true, false, true);
-        for (const id of ids) {
+        // Fetch items in pages through the host API instead of one call per row.
+        for (let offset = 0; offset < ids.length; offset += 100) {
           if (this._stopped) return;
-          if (++scanned % 25 === 0) await swYield(100);
-          var item = await Zotero.Items.getAsync(id);
-          var target = await this.resolveDocItem(item);
-          if (!target) continue;
-          live.add(this.docKey(target));
-          this._itemKeys.set(id, {
-            key: this.docKey(item),
-            parentID: item.parentItemID,
-          });
-          if (SWPref("backgroundIndexing", true)) this.enqueue(id);
+          var page = await Zotero.Items.getAsync(
+            ids.slice(offset, offset + 100),
+          );
+          for (var item of page) {
+            if (this._stopped) return;
+            if (++scanned % 25 === 0) await swYield(100);
+            var target = await this.resolveDocItem(item);
+            if (!target) continue;
+            live.add(this.docKey(target));
+            this._itemKeys.set(item.id, {
+              key: this.docKey(item),
+              parentID: item.parentItemID,
+            });
+            if (SWPref("backgroundIndexing", true)) this.enqueue(item.id);
+          }
         }
       }
       this._libraryTotal = live.size;
@@ -547,6 +553,7 @@ var SWIndexer = {
   },
 
   requestStop() {
+    if (this._stopped) return;
     this._stopped = true;
     if (this.corpus) this.corpus._stopped = true;
     if (this._notifierID) {

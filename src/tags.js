@@ -14,6 +14,85 @@ function swTagKey(name) {
   return swTagWords(name).join(" ").toLowerCase();
 }
 
+function swTagAliasKey(key) {
+  const expansions = {
+    cnn: "convolutional neural network",
+    gan: "generative adversarial network",
+    gnn: "graph neural network",
+    rnn: "recurrent neural network",
+    gcn: "graph convolutional network",
+    mlp: "multilayer perceptron",
+    svm: "support vector machine",
+    vqa: "visual question answering",
+    nlp: "natural language processing",
+    llm: "large language model",
+  };
+  return key
+    .replace(/\b(networks|nets|models|machines|perceptrons)\b/g, (word) =>
+      word.slice(0, -1),
+    )
+    .replace(
+      /\b(cnn|gan|gnn|rnn|gcn|mlp|svm|vqa|nlp|llm)s?\b/g,
+      (_, word) => expansions[word],
+    )
+    .replace(/\bconvolutional net\b/g, "convolutional neural network")
+    .replace(/\bneural net\b/g, "neural network");
+}
+
+function swTagDuplicateReason(left, right) {
+  if (left === right) return "name";
+  if (swTagAliasKey(left) === swTagAliasKey(right)) return "alias";
+  // Explicit expansions avoid guessing ambiguous acronyms from initials alone.
+  const expansion = (value) => {
+    const match = value.match(/^(.+?)\s*\(([a-z][a-z0-9]{1,9})\)$/);
+    if (!match) return null;
+    const words = match[1].trim().split(" ");
+    return words.map((word) => word[0]).join("") === match[2]
+      ? [match[1].trim(), match[2]]
+      : null;
+  };
+  if (expansion(left)?.includes(right) || expansion(right)?.includes(left))
+    return "abbreviation";
+  const singular = (word) =>
+    word.length > 4 && /ies$/.test(word)
+      ? word.slice(0, -3) + "y"
+      : word.length > 4 && /s$/.test(word) && !/(ss|us|is)$/.test(word)
+        ? word.slice(0, -1)
+        : word;
+  const l = left.split(" "),
+    r = right.split(" ");
+  if (l.length !== r.length) return null;
+  if (l.every((word, i) => singular(word) === singular(r[i]))) return "plural";
+  const differences = l
+    .map((word, i) => [word, r[i]])
+    .filter(([x, y]) => x !== y);
+  if (differences.length !== 1) return null;
+  const [x, y] = differences[0];
+  // Never blur numbers, scientific punctuation or semantic qualifiers.
+  if (
+    !/^[a-z]{7,}$/.test(x) ||
+    !/^[a-z]{7,}$/.test(y) ||
+    /^(non|un|semi|self|weak|supervised)/.test(x) ||
+    /^(non|un|semi|self|weak|supervised)/.test(y)
+  )
+    return null;
+  if (Math.abs(x.length - y.length) > 1) return null;
+  let i = 0,
+    j = 0,
+    edits = 0;
+  while (i < x.length && j < y.length) {
+    if (x[i] === y[j]) {
+      i++;
+      j++;
+      continue;
+    }
+    if (++edits > 1) return null;
+    if (x.length >= y.length) i++;
+    if (y.length >= x.length) j++;
+  }
+  return edits + (x.length - i) + (y.length - j) === 1 ? "spelling" : null;
+}
+
 var SWTags = {
   _stopped: false,
   _dialogs: new Set(),
@@ -238,11 +317,14 @@ var SWTags = {
     const catalog = new Map();
     for (const name of names)
       if (!catalog.has(swTagKey(name))) catalog.set(swTagKey(name), name);
-    const terms = SWTokenizer.termFreq(
-      String(target.getField?.("title") || "") +
-        " " +
-        String(target.getField?.("abstractNote") || ""),
-    );
+    const phraseText = (text) =>
+      " " +
+      swTagKey(String(text || "").replace(/<[^>]*>/g, " "))
+        .replace(/[^\p{L}\p{N}+#]+/gu, " ")
+        .trim() +
+      " ";
+    const title = phraseText(target.getField?.("title"));
+    const abstract = phraseText(target.getField?.("abstractNote"));
     const candidates = new Map(catalog);
     for (const name of this.phrases(target))
       if (!candidates.has(swTagKey(name))) candidates.set(swTagKey(name), name);
@@ -267,13 +349,9 @@ var SWTags = {
       })
       .map((row) => ({
         score: row.score,
-        terms: new Set(
-          SWTokenizer.tokenize(
-            String(row.item.getField?.("title") || "") +
-              " " +
-              String(row.item.getField?.("abstractNote") || ""),
-          ),
-        ),
+        title: phraseText(row.item.getField?.("title")),
+        abstract: phraseText(row.item.getField?.("abstractNote")),
+        tags: new Set((row.item.getTags?.() || []).map((t) => swTagKey(t.tag))),
       }));
     const neighborWeight = Math.max(
       1,
@@ -282,27 +360,32 @@ var SWTags = {
     const out = [];
     for (const [key, name] of candidates) {
       if (!key || current.has(key) || excluded.has(key)) continue;
-      const tagTerms = [...SWTokenizer.termFreq(name).keys()];
-      const direct = tagTerms.length
-        ? tagTerms.filter((t) => terms.has(t)).length / tagTerms.length
-        : 0;
+      const phrase = phraseText(name);
+      if (phrase.trim().length < 2) continue;
+      const inTitle = title.includes(phrase);
+      const inAbstract = abstract.includes(phrase);
       const vote = votes.get(key);
-      const support = tagTerms.length
-        ? neighbors.filter((row) =>
-            tagTerms.every((term) => row.terms.has(term)),
-          )
-        : [];
+      const support = neighbors.filter(
+        (row) =>
+          row.tags.has(key) ||
+          row.title.includes(phrase) ||
+          row.abstract.includes(phrase),
+      );
+      // Direct phrases and neighboring tags contribute independently.
+      const isNew = !catalog.has(key) && !vote;
+      if (isNew ? !inTitle && !inAbstract : !inTitle && !inAbstract && !vote)
+        continue;
+      const direct = inTitle ? 1 : inAbstract ? 0.75 : 0;
       const contextualScore =
         support.reduce((sum, row) => sum + row.score, 0) / neighborWeight;
       const neighborScore = Math.max(
         (vote?.score || 0) / maximum,
         contextualScore,
       );
-      if (!direct && !neighborScore) continue;
       out.push({
         name,
-        isNew: !catalog.has(key) && !vote,
-        count: Math.max(vote?.count || 0, support.length),
+        isNew,
+        count: support.length,
         directScore: direct,
         neighborScore,
         score: 0.55 * direct + 0.45 * neighborScore,
@@ -330,123 +413,123 @@ var SWTags = {
       try {
         scores = await SWSemantic.tagSimilarity(
           target,
-          candidates.slice(0, 12).map((t) => t.name),
+          candidates.slice(0, 24).map((t) => t.name),
           active,
         );
       } catch (error) {
         if (!this._stopped && active()) Zotero.logError(error);
       }
       if (scores) {
-        candidates = candidates.slice(0, 12);
+        candidates = candidates.slice(0, 24);
         candidates.forEach((tag, i) => {
-          tag.directScore = Math.max(0, scores[i]);
-          tag.score = 0.55 * tag.directScore + 0.45 * tag.neighborScore;
+          if (Number.isFinite(scores[i]))
+            tag.score = 0.7 * tag.score + 0.3 * Math.max(0, scores[i]);
         });
       }
     }
     if (this._stopped || !active()) return [];
     candidates.sort((a, b) => b.score - a.score || b.count - a.count);
-    // Keep both kinds visible when a paper has well-supported new topic phrases.
+    const currentProtected = this.protectedKeys(target.libraryID);
     const existingKeys = new Set(
       [...names, ...(target.getTags?.() || []).map((tag) => tag.tag)].map(
-        (name) => this.words(name).join(" ").toLowerCase(),
+        swTagKey,
       ),
     );
-    const newKeys = new Set();
-    const currentProtected = this.protectedKeys(target.libraryID);
     candidates = candidates
       .map((tag) =>
         tag.isNew ? { ...tag, name: this.formatName(tag.name) } : tag,
       )
-      .filter((tag) => {
-        if (currentProtected.has(swTagKey(tag.name))) return false;
-        if (!tag.isNew) return true;
-        const key = this.words(tag.name).join(" ").toLowerCase();
-        if (!key || existingKeys.has(key) || newKeys.has(key)) return false;
-        newKeys.add(key);
-        return true;
-      });
-    return [
-      ...candidates.filter((t) => !t.isNew).slice(0, 4),
-      ...candidates.filter((t) => t.isNew && t.directScore >= 0.35).slice(0, 2),
-    ].sort((a, b) => b.score - a.score);
+      .filter(
+        (tag) =>
+          !currentProtected.has(swTagKey(tag.name)) &&
+          (!tag.isNew || !existingKeys.has(swTagKey(tag.name))),
+      );
+    const selected = [];
+    const selectedKeys = new Set();
+    for (const tag of candidates) {
+      const key = swTagKey(tag.name);
+      if (selectedKeys.has(key)) continue;
+      if (
+        candidates.some(
+          (other) =>
+            swTagKey(other.name) !== key &&
+            tag.isNew &&
+            other.isNew &&
+            (" " + swTagKey(other.name) + " ").includes(" " + key + " "),
+        )
+      )
+        continue;
+      if (tag.isNew && selected.filter((other) => other.isNew).length >= 4)
+        continue;
+      selected.push(tag);
+      selectedKeys.add(key);
+      if (selected.length === 12) break;
+    }
+    return selected;
+  },
+
+  duplicateReason(a, b) {
+    return swTagDuplicateReason(swTagKey(a), swTagKey(b));
   },
 
   duplicateGroups(names) {
-    const entries = [...new Set(names)].filter((name) => swTagKey(name));
-    const parents = entries.map((_, i) => i);
-    const root = (i) => {
-      while (parents[i] !== i) {
-        parents[i] = parents[parents[i]];
-        i = parents[i];
-      }
-      return i;
-    };
-    const join = (a, b) => {
-      parents[root(b)] = root(a);
-    };
-    const keys = new Map();
-    const grams = new Map();
-    const fingerprints = [];
-    const singular = (word) => {
-      if (word.length < 5) return word;
-      if (/ies$/u.test(word)) return word.slice(0, -3) + "y";
-      if (/(?:ches|shes|xes|zes|sses)$/u.test(word)) return word.slice(0, -2);
-      return word.endsWith("s") && !/(?:ss|us|is)$/u.test(word)
-        ? word.slice(0, -1)
-        : word;
-    };
-    for (const [i, name] of entries.entries()) {
-      const words = swTagWords(
-        this.formatName(name, { style: "sentence", hashtag: false }),
-      ).map((word) => singular(word.toLowerCase()));
-      const normalized = words.join(" ");
-      // Suggestions only: order, plural forms and separator differences can
-      // describe the same topic. Actual native names remain untouched.
-      for (const key of [
-        swTagKey(name),
-        words.slice().sort().join(" "),
-        normalized.replace(/ /gu, ""),
-      ]) {
-        if (keys.has(key)) join(i, keys.get(key));
-        else keys.set(key, i);
-      }
-      const text = normalized.replace(/ /gu, "");
-      const signature = (text.match(/\d+/gu) || []).join("|");
-      const pairs = new Set();
-      // Short names and punctuation carry meaning (C, C++, C#, model versions).
-      if (text.length >= 8 && /^[\p{L}\p{N}]+$/u.test(text))
-        for (let n = 0; n < text.length - 2; n++)
-          pairs.add(text.slice(n, n + 3));
-      const overlaps = new Map();
-      for (const gram of pairs)
-        for (const other of grams.get(signature + ":" + gram) || [])
-          overlaps.set(other, (overlaps.get(other) || 0) + 1);
-      for (const [other, overlap] of overlaps) {
-        const previous = fingerprints[other];
+    const groups = [],
+      index = new Map();
+    const keys = new Map(
+      [...new Set(names)].map((name) => [name, swTagKey(name)]),
+    );
+    for (const [name, key] of keys) {
+      if (!key) continue;
+      const words = key.split(" ");
+      const singular = (word) =>
+        word.length > 4 && /ies$/.test(word)
+          ? word.slice(0, -3) + "y"
+          : word.length > 4 && /s$/.test(word) && !/(ss|us|is)$/.test(word)
+            ? word.slice(0, -1)
+            : word;
+      const signatures = new Set([
+        "name:" + key,
+        "alias:" + swTagAliasKey(key),
+        "plural:" + words.map(singular).join(" "),
+      ]);
+      const explicit = key.match(/^(.+?)\s*\(([a-z][a-z0-9]{1,9})\)$/);
+      if (explicit && swTagDuplicateReason(key, explicit[2]))
+        for (const alias of [explicit[1].trim(), explicit[2]])
+          signatures.add("name:" + alias);
+      // Deletion signatures retrieve edit-distance-one candidates without an all-pairs scan.
+      words.forEach((word, position) => {
         if (
-          Math.abs(text.length - previous.length) <=
-            Math.max(text.length, previous.length) * 0.2 &&
-          (2 * overlap) / (pairs.size + previous.size) >= 0.8
+          !/^[a-z]{7,}$/.test(word) ||
+          /^(non|un|semi|self|weak|supervised)/.test(word)
         )
-          join(i, other);
-      }
-      fingerprints.push({ length: text.length, size: pairs.size });
-      for (const gram of pairs) {
-        const key = signature + ":" + gram;
-        const bucket = grams.get(key) || [];
-        bucket.push(i);
-        grams.set(key, bucket);
+          return;
+        const add = (value) =>
+          signatures.add(
+            "spelling:" +
+              words.map((part, i) => (i === position ? value : part)).join(" "),
+          );
+        add(word);
+        for (let i = 0; i < word.length; i++)
+          add(word.slice(0, i) + word.slice(i + 1));
+      });
+      const candidates = new Set(
+        [...signatures].flatMap((signature) => [
+          ...(index.get(signature) || []),
+        ]),
+      );
+      // Complete-link groups prevent a weak match from chaining unrelated tags.
+      const group = [...candidates].find((values) =>
+        values.every((value) => swTagDuplicateReason(keys.get(value), key)),
+      );
+      const values = group || [name];
+      if (group) group.push(name);
+      else groups.push(values);
+      for (const signature of signatures) {
+        if (!index.has(signature)) index.set(signature, new Set());
+        index.get(signature).add(values);
       }
     }
-    const groups = new Map();
-    for (const [i, name] of entries.entries()) {
-      const key = root(i);
-      const group = groups.get(key) || [];
-      group.push(name);
-      groups.set(key, group);
-    }
-    return [...groups.values()].filter((group) => group.length > 1);
+    return groups.filter((group) => group.length > 1);
   },
 
   _check(libraryID, active = () => true) {
@@ -467,23 +550,28 @@ var SWTags = {
     }
   },
 
-  async addSelected(itemID, libraryID, names, active = () => true) {
-    const choices = names.map((value) =>
-      typeof value === "string" ? { name: value, isNew: false } : value,
-    );
-    names = choices.map((choice) => choice.name);
-    const existingChoice = (name) =>
-      choices.some((choice) => choice.name === name && !choice.isNew);
+  async addSelected(
+    itemID,
+    libraryID,
+    names,
+    active = () => true,
+    newNames = [],
+  ) {
     if (
       names.some(
         (name) =>
           typeof name !== "string" ||
           !name ||
-          (!existingChoice(name) && name !== this.normalizeName(name)) ||
           name.length > 255 ||
           [...name].some(
             (char) => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127,
           ),
+      )
+    )
+      throw new Error("similar-works-tags-invalid-name");
+    if (
+      newNames.some(
+        (name) => !names.includes(name) || name !== this.normalizeName(name),
       )
     )
       throw new Error("similar-works-tags-invalid-name");
@@ -502,7 +590,7 @@ var SWTags = {
       (await Zotero.Tags.getAll(libraryID)).map((tag) => tag.tag),
     );
     this._check(libraryID, active);
-    if (choices.some((choice) => !existing.has(choice.name) && !choice.isNew))
+    if (names.some((name) => !existing.has(name) && !newNames.includes(name)))
       throw new Error("similar-works-tags-changed");
     let added = 0;
     try {
@@ -722,7 +810,7 @@ var SWTags = {
     const dialog = win.openDialog(
       url,
       "",
-      "chrome,centerscreen,resizable,width=760,height=640",
+      "chrome,centerscreen,resizable,width=680,height=560",
       {
         api: this,
         libraryID,

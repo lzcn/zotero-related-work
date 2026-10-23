@@ -138,29 +138,37 @@ test("duplicate grouping keeps punctuation that distinguishes C++, C# and C", ()
   );
 });
 
-test("possible duplicates include plural, reordered, dictionary and near-spelling candidates without merging tags", () => {
+test("duplicates separate related and opposite concepts while suggesting spelling variants", () => {
   const { api, writes } = fixture();
-  const groups = api.duplicateGroups([
+  const names = [
+    "#Convex Optimization",
+    "#Nonconvex Optimization",
+    "#Graph Representation Learning",
+    "#Representation Learning",
+    "#Self-supervised Learning",
+    "#Semi-supervised Learning",
+    "#Supervised Learning",
+    "#Unsupervised Learning",
+    "#Weakly Supervised Learning",
     "Graph neural network",
     "Neural networks graph",
     "graphneuralnetwork",
-    "Representation learning",
-    "Representaton learning",
     "GPT-2",
     "GPT-3",
     "C++",
     "C#",
-    "Graph classification",
-    "Image retrieval",
-    "bert-generation",
-    "Bert Generation",
+  ];
+  assert.deepEqual(Array.from(api.duplicateGroups(names)), []);
+  const variants = api.duplicateGroups([
+    ...names,
+    "convex_optimization",
+    "#GraphRepresentationLearning",
   ]);
   assert.deepEqual(
-    Array.from(groups, (group) => Array.from(group)),
+    Array.from(variants, (group) => Array.from(group)),
     [
-      ["Graph neural network", "Neural networks graph", "graphneuralnetwork"],
-      ["Representation learning", "Representaton learning"],
-      ["bert-generation", "Bert Generation"],
+      ["#Convex Optimization", "convex_optimization"],
+      ["#Graph Representation Learning", "#GraphRepresentationLearning"],
     ],
   );
   assert.deepEqual(writes, []);
@@ -239,76 +247,54 @@ test("read-only and changed tags cannot merge; shutdown stops after the current 
   );
 });
 
-test("text tags use direct topic coverage and neighbor support, and distinguish extracted new phrases", async () => {
-  const { api, item } = fixture();
+test("new suggestions can come from the paper without neighboring support", async () => {
+  const { api, context, item } = fixture();
   item.getField = (field) =>
     field === "title"
       ? "Graph Neural Networks for molecule prediction"
-      : "Graph Neural Networks improve molecule prediction. We evaluate molecule prediction.";
-  const rows = [
-    {
-      score: 0.8,
-      item: { id: 2, libraryID: 1, getTags: () => [{ tag: "Other" }] },
+      : "Graph Neural Networks improve molecule prediction. Neural features form a network.";
+  const neighbor = (id) => ({
+    score: 0.8,
+    item: {
+      id,
+      libraryID: 1,
+      getTags: () => [{ tag: "Other" }],
+      getField: () => "molecule prediction",
     },
-  ];
-  const tags = api.rank(item, rows, [
-    "Other",
-    "Graph Neural Networks",
-    "Unrelated",
-  ]);
-  assert.equal(
-    tags.find((tag) => tag.name === "Graph Neural Networks").isNew,
-    false,
-  );
-  assert.equal(
-    tags.find((tag) => tag.name === "Graph Neural Networks").directScore,
-    1,
-  );
-  assert.equal(tags.find((tag) => tag.name === "Other").neighborScore, 0.8);
-  assert.equal(
-    tags.find((tag) => tag.name === "molecule prediction").isNew,
-    true,
-  );
-  assert.equal(
-    tags.some((tag) => tag.name === "Unrelated"),
-    false,
-  );
-  const result = await api.suggest(item, rows);
-  assert.ok(result.some((tag) => tag.isNew));
-  assert.ok(result.some((tag) => !tag.isNew));
-  const supported = api.rank(
-    item,
-    [
-      {
-        score: 0.9,
-        item: {
-          id: 3,
-          libraryID: 1,
-          getTags: () => [],
-          getField: () => "molecule prediction",
-        },
-      },
-    ],
-    [],
+  });
+  context.Zotero.Tags.getAll = async () =>
+    ["Other", "Graph Neural Networks", "Neural network"].map((tag) => ({
+      tag,
+    }));
+  const one = await api.suggest(item, [neighbor(2), neighbor(2)]);
+  assert.ok(one.some((tag) => tag.name === "Graph Neural Networks"));
+  assert.ok(one.some((tag) => tag.isNew));
+  const rows = [neighbor(2), neighbor(3)];
+  const tags = await api.suggest(item, rows);
+  assert.ok(
+    tags.some((tag) => tag.name === "Graph Neural Networks" && !tag.isNew),
   );
   assert.ok(
-    supported.find((tag) => tag.name === "molecule prediction").neighborScore >
-      0,
+    tags.some((tag) => tag.name === "Molecule prediction" && tag.isNew),
   );
+  assert.ok(tags.some((tag) => tag.name === "Other"));
+  assert.ok(!tags.some((tag) => tag.name === "Learning"));
+  assert.ok(tags.filter((tag) => /deep/i.test(tag.name)).length <= 1);
+  item.getField = () => "";
+  assert.deepEqual(Array.from(await api.suggest(item, [])), []);
 });
 
-test("new tags require an explicit selected new candidate and validate their names", async () => {
+test("suggested tag application rejects missing tags and invalid names", async () => {
   const { api, item } = fixture();
-  await api.addSelected(1, 1, [{ name: "Graph Neural Networks", isNew: true }]);
-  assert.ok(item.hasTag("Graph Neural Networks"));
   await assert.rejects(
-    api.addSelected(1, 1, [{ name: " bad name ", isNew: true }]),
-    /invalid-name/,
+    api.addSelected(1, 1, ["Graph Neural Networks"]),
+    /changed/,
   );
   await assert.rejects(
-    api.addSelected(1, 1, [{ name: "bad\u0000name", isNew: true }]),
+    api.addSelected(1, 1, ["bad\u0000name"]),
     /invalid-name/,
   );
+  assert.deepEqual(item.names, ["Original"]);
 });
 
 test("normalization supports one native rename to a new name while preserving color and item identities", async () => {
@@ -358,32 +344,26 @@ test("fixed-space naming preserves scientific and unknown mixed-case names", () 
   );
 });
 
-test("configured naming applies to new suggestions while preserving existing native tag names", async () => {
+test("suggestions preserve existing names and format supported new phrases", async () => {
   const { api, context, item } = fixture();
   context.SWPref = (key, fallback) =>
     ({ tagNameStyle: "sentence", tagHashtag: true })[key] ?? fallback;
-  item.getField = (field) =>
-    field === "title"
-      ? "Graph Neural Networks for molecule prediction"
-      : "Graph Neural Networks improve molecule prediction.";
-  const rows = [
-    {
-      score: 0.9,
-      item: { id: 2, libraryID: 1, getTags: () => [{ tag: "Deep Learning" }] },
+  item.getField = () =>
+    "Deep Learning for Graph Neural Networks and molecule prediction";
+  const rows = [2, 3].map((id) => ({
+    score: 0.9,
+    item: {
+      id,
+      libraryID: 1,
+      getTags: () => [{ tag: "Deep Learning" }],
+      getField: () => item.getField(),
     },
-  ];
-  const tags = await api.suggest(item, rows);
+  }));
+  const suggestions = await api.suggest(item, rows);
   assert.ok(
-    tags.some((tag) => tag.isNew && tag.name === "#Graph neural networks"),
+    suggestions.some((tag) => tag.name === "Deep Learning" && !tag.isNew),
   );
-  assert.ok(tags.some((tag) => !tag.isNew && tag.name === "Deep Learning"));
-  item.names = ["#MoleculePrediction"];
-  assert.equal(
-    (await api.suggest(item, rows)).some(
-      (tag) => tag.isNew && tag.name === "#Molecule prediction",
-    ),
-    false,
-  );
+  assert.ok(suggestions.some((tag) => tag.isNew && tag.name.startsWith("#")));
 });
 
 test("colored tags and aliases are protected in their library, including merge destinations and new-tag creation", async () => {
@@ -404,10 +384,7 @@ test("colored tags and aliases are protected in their library, including merge d
   await assert.rejects(api.preview(1, ["Deep Learning"]), /protected/);
   await assert.rejects(api.merge(1, ["deep-learning"], "Topic"), /protected/);
   await assert.rejects(api.merge(1, ["Other"], "#DeepLearning"), /protected/);
-  await assert.rejects(
-    api.addSelected(1, 1, [{ name: "#deep_learning", isNew: true }]),
-    /protected/,
-  );
+  await assert.rejects(api.addSelected(1, 1, ["#deep_learning"]), /protected/);
   assert.deepEqual(writes, []);
   assert.deepEqual(item.names, ["Original"]);
   context.SWPref = (key, fallback) =>
@@ -537,4 +514,102 @@ test("bulk removal uses the native host operation, preserves protected tags and 
   context.Zotero.Tags.getColors = () => new Map([["Deep Learning", {}]]);
   await assert.rejects(api.remove(1, ["Deep Learning"]), /protected/);
   await api.finishWrites();
+});
+
+test("more grounded suggestions are allowed without filling or proliferating new tags", async () => {
+  const { api, context, item } = fixture();
+  const names = [
+    "Graph clustering",
+    "Molecule prediction",
+    "Image retrieval",
+    "Object detection",
+    "Semantic segmentation",
+    "Domain adaptation",
+    "Attention mechanism",
+    "Contrastive learning",
+    "Matrix factorization",
+  ];
+  context.Zotero.Tags.getAll = async () => names.map((tag) => ({ tag }));
+  item.getField = () => names.join(" and ");
+  const existing = await api.suggest(item, []);
+  assert.equal(existing.length, 9);
+  assert.ok(existing.every((tag) => !tag.isNew));
+  context.Zotero.Tags.getAll = async () => [];
+  const rows = [2, 3].map((id) => ({
+    score: 0.9,
+    item: {
+      id,
+      libraryID: 1,
+      getTags: () => [],
+      getField: () => item.getField(),
+    },
+  }));
+  const fresh = await api.suggest(item, rows);
+  assert.equal(fresh.length, 4);
+  assert.ok(fresh.every((tag) => tag.isNew));
+  assert.equal((await api.suggest(item, [rows[0], rows[0]])).length, 4);
+  const phrase = fresh[0].name;
+  await assert.rejects(api.addSelected(1, 1, [phrase]), /changed/);
+  assert.equal(await api.addSelected(1, 1, [phrase], () => true, [phrase]), 1);
+  assert.ok(item.hasTag(phrase));
+});
+
+test("duplicate strategies explain plural, explicit abbreviations and spelling without transitive guessing", () => {
+  const { api } = fixture();
+  assert.equal(
+    api.duplicateReason("Graph neural networks", "Graph neural network"),
+    "alias",
+  );
+  assert.equal(
+    api.duplicateReason("GNN", "Graph neural network (GNN)"),
+    "abbreviation",
+  );
+  assert.equal(
+    api.duplicateReason("Representation learning", "Representaton learning"),
+    "spelling",
+  );
+  assert.equal(api.duplicateReason("GPT-2", "GPT-3"), null);
+  assert.equal(
+    api.duplicateReason("Supervised learning", "Unsupervised learning"),
+    null,
+  );
+  assert.equal(api.duplicateReason("GNN", "Graph neural network"), "alias");
+  const groups = api.duplicateGroups([
+    "GNN",
+    "Graph neural network (GNN)",
+    "Graph neural network",
+  ]);
+  assert.equal(groups[0].length, 3);
+});
+
+test("existing suggestions include abstract-only matches and neighboring tags", async () => {
+  const { api, item } = fixture();
+  item.getField = (field) =>
+    field === "title" ? "A new approach" : "Deep learning improves accuracy";
+  assert.ok(
+    (await api.suggest(item, [])).some((tag) => tag.name === "Deep Learning"),
+  );
+  const rows = [
+    {
+      score: 0.9,
+      item: { id: 2, libraryID: 1, getTags: () => [{ tag: "Other" }] },
+    },
+  ];
+  assert.ok(
+    (await api.suggest(item, rows)).some((tag) => tag.name === "Other"),
+  );
+});
+
+test("terminology aliases preserve task modifiers", () => {
+  const { api } = fixture();
+  assert.equal(api.duplicateReason("Convolutional Nets", "CNN"), "alias");
+  assert.equal(
+    api.duplicateReason(
+      "Conditional GAN",
+      "Conditional generative adversarial network",
+    ),
+    "alias",
+  );
+  assert.equal(api.duplicateReason("GAN", "Conditional GAN"), null);
+  assert.equal(api.duplicateGroups(["Convolutional Nets", "CNN"])[0].length, 2);
 });

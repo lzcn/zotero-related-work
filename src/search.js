@@ -365,6 +365,18 @@ var SWSearch = (() => {
     }
     return Math.min(1, Math.max(0, sum));
   }
+  // SimHash is a heuristic. Apply only to substantial full-text vectors and
+  // require a very high cosine too, avoiding false merges of short metadata.
+  function isDuplicate(a, b) {
+    return (
+      !a.weak &&
+      !b.weak &&
+      a.length >= 100 &&
+      b.length >= 100 &&
+      distance(a.simhash, b.simhash) <= 3 &&
+      cosine(a.vector, b.vector) >= 0.95
+    );
+  }
   function seek(entries, target, from = 0) {
     let hi = entries.length,
       lo = from;
@@ -757,20 +769,11 @@ var SWSearch = (() => {
       }
       results.sort((a, b) => b.score - a.score || a.key.localeCompare(b.key));
       const accepted = [];
-      // SimHash is a heuristic. Apply only to substantial full-text vectors and
-      // require a very high cosine too, avoiding false merges of short metadata.
-      const duplicate = (a, b) =>
-        !a.weak &&
-        !b.weak &&
-        a.length >= 100 &&
-        b.length >= 100 &&
-        distance(a.simhash, b.simhash) <= 3 &&
-        cosine(a.vector, b.vector) >= 0.95;
       for (const match of results) {
         const doc = this.docs.get(match.key);
         if (
-          duplicate(query, doc) ||
-          accepted.some((m) => duplicate(this.docs.get(m.key), doc))
+          isDuplicate(query, doc) ||
+          accepted.some((m) => isDuplicate(this.docs.get(m.key), doc))
         )
           continue;
         accepted.push(match);
@@ -794,6 +797,7 @@ var SWSearch = (() => {
     decodeSimhash,
     distance,
     cosine,
+    isDuplicate,
     fuse,
     SIGNATURE_SIZE,
     CANDIDATES,

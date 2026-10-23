@@ -1,22 +1,22 @@
 :root {
   color-scheme: light dark;
 }
-body {
+#tag-manager {
   margin: 0;
-  padding: 20px;
+  padding: 12px;
   font: menu;
   color: var(--text-primary);
-  background: var(--material-background, Canvas);
+  background: var(--material-toolbar, -moz-Dialog);
   display: flex;
   flex-direction: column;
   height: 100vh;
   box-sizing: border-box;
-  gap: 12px;
+  gap: 8px;
 }
 header {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 8px;
 }
 header input[type="search"] {
   min-width: 0;
@@ -25,7 +25,7 @@ header input[type="search"] {
 label {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
 }
 #preview {
   margin: 0;
@@ -35,11 +35,12 @@ main {
   flex: 1;
   min-height: 0;
   overflow: auto;
-  border-block: 1px solid var(--fill-secondary, rgba(128, 128, 128, 0.25));
-  padding-block: 8px;
+  border: 1px solid var(--fill-secondary, rgba(128, 128, 128, 0.25));
+  padding: 3px;
+  background: var(--material-background, Field);
 }
 .tag {
-  padding: 6px 4px;
+  padding: 3px 5px;
   overflow-wrap: anywhere;
 }
 .tag span {
@@ -48,10 +49,11 @@ main {
 footer {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
-  gap: 10px;
+  gap: 6px;
   align-items: center;
 }
 #preview,
+#collision,
 .actions {
   grid-column: 1 / -1;
 }
@@ -62,23 +64,36 @@ footer {
 }
 input,
 select,
-button {
-  font: inherit;
+#mode {
+  width: auto;
+  min-width: 130px;
+  justify-self: start;
+  appearance: auto;
+  background-image: none;
 }
-button {
-  padding: 5px 12px;
+input[type="search"],
+input[type="text"] {
+  padding: 3px 6px;
+  min-height: 24px;
+  box-sizing: border-box;
 }
-#merge:not(:disabled) {
-  color: white;
-  background: var(--accent-blue, #007aff);
-  border-color: transparent;
+.tag:hover {
+  background: var(--fill-quinary, rgba(127, 127, 127, 0.08));
+}
+.tag:has(input:checked) {
+  background: var(--accent-blue10, light-dark(#e6f0fc, #25384f));
+}
+.tag-group-start {
+  border-top: 1px solid var(--fill-secondary, GrayText);
+  margin-top: 4px;
+  padding-top: 6px;
 }
 
 .selection-bar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 8px;
 }
 #selection-count,
 .tag small {
@@ -88,20 +103,54 @@ button {
   flex: 1;
   overflow-wrap: anywhere;
 }
-.tag {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) minmax(0, 1fr);
+.tag td {
+  padding: 4px 6px;
 }
+.tag label {
+  cursor: default;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+thead {
+  position: sticky;
+  top: 0;
+  background: var(--material-toolbar, -moz-Dialog);
+}
+th {
+  text-align: left;
+  border-bottom: 1px solid GrayText;
+}
+th button {
+  appearance: auto;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+}
+th[aria-sort="ascending"] button::after {
+  content: " ▴";
+}
+th[aria-sort="descending"] button::after {
+  content: " ▾";
+}
+.tag-count {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+td:last-child {
+  color: var(--text-secondary, GrayText);
+}
+#target {
+  width: 100%;
+}
+
 .tag small {
   text-align: right;
   overflow-wrap: anywhere;
 }
 [hidden] {
   display: none !important;
-}
-
-#merge[data-action="delete"]:not(:disabled) {
-  background: var(--accent-red, #d73535);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -112,4 +161,23 @@ button {
     transition: none !important;
     scroll-behavior: auto !important;
   }
+}
+
+input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  min-width: 14px;
+  margin: 0;
+  flex: none;
+}
+
+#collision {
+  margin: 0;
+}
+
+th:first-child {
+  width: 52%;
+}
+th:nth-child(2) {
+  width: 14%;
 }
