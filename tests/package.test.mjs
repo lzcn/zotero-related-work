@@ -93,3 +93,27 @@ test("production package contains semantic retrieval without generative AI runti
     /similar-works-ai-/,
   );
 });
+
+test("production package downloads large runtime assets instead of bundling them", async () => {
+  const bytes = await readFile(
+    new URL("../dist/zotero-related-work.xpi", import.meta.url),
+  );
+  const files = unzipSync(bytes);
+  assert.ok(bytes.length < 1024 * 1024, "XPI must stay below 1 MiB");
+  assert.ok(
+    !Object.keys(files).some((name) => /\.(dylib|onnx|wasm)$/.test(name)),
+  );
+  if (files["native/manifest.json"]) {
+    const manifest = JSON.parse(strFromU8(files["native/manifest.json"]));
+    assert.ok(files["native/inference"]?.length);
+    assert.match(
+      manifest.files["libonnxruntime.1.22.0.dylib"],
+      /^[a-f0-9]{64}$/,
+    );
+    assert.match(manifest.runtime.sha256, /^[a-f0-9]{64}$/);
+    assert.equal(
+      manifest.runtime.url,
+      "https://github.com/microsoft/onnxruntime/releases/download/v1.22.0/onnxruntime-osx-universal2-1.22.0.tgz",
+    );
+  }
+});

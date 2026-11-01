@@ -19,6 +19,12 @@ const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const version = "1.22.0";
 const checksum =
   "cfa6f6584d87555ed9f6e7e8a000d3947554d589efe3723b8bfa358cd263d03c";
+const url = `https://github.com/microsoft/onnxruntime/releases/download/v${version}/onnxruntime-osx-universal2-${version}.tgz`;
+export const nativeRuntime = {
+  url,
+  sha256: checksum,
+  member: `onnxruntime-osx-universal2-${version}/lib/libonnxruntime.${version}.dylib`,
+};
 const cache = join(root, "build/native-sdk");
 const sdk = join(cache, `onnxruntime-osx-universal2-${version}`);
 const output = join(root, "build/native");
@@ -36,7 +42,6 @@ export async function prepareNativeSDK() {
     existsSync(join(directory, `lib/libonnxruntime.${version}.dylib`));
   if (!complete(sdk)) {
     const archive = join(cache, "sdk.tgz");
-    const url = `https://github.com/microsoft/onnxruntime/releases/download/v${version}/onnxruntime-osx-universal2-${version}.tgz`;
     const verified = async (file) =>
       existsSync(file) &&
       createHash("sha256")

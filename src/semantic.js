@@ -643,6 +643,7 @@ var SWSemantic = {
   },
 
   _native: null,
+  _extracting: null,
   _nativeExit: Promise.resolve(),
   _nativeBuffer: "",
 
@@ -681,7 +682,12 @@ var SWSemantic = {
     const names = ["inference", "libonnxruntime.1.22.0.dylib"];
     if (
       !manifest?.files ||
-      names.some((name) => !/^[a-f0-9]{64}$/.test(manifest.files[name]))
+      names.some((name) => !/^[a-f0-9]{64}$/.test(manifest.files[name])) ||
+      !/^[a-f0-9]{64}$/.test(manifest.runtime?.sha256) ||
+      manifest.runtime?.url !==
+        "https://github.com/microsoft/onnxruntime/releases/download/v1.22.0/onnxruntime-osx-universal2-1.22.0.tgz" ||
+      manifest.runtime?.member !==
+        "onnxruntime-osx-universal2-1.22.0/lib/" + names[1]
     )
       throw new Error("Invalid native runtime manifest");
     const dir = PathUtils.join(
@@ -701,12 +707,25 @@ var SWSemantic = {
           (await IOUtils.computeHexDigest(path, "sha256")) ===
           manifest.files[name];
       if (!valid) {
-        const bytes = await this._packageFile("native/" + name);
-        if ((await this._checksum(bytes)) !== manifest.files[name])
-          throw new Error("Native runtime checksum mismatch: " + name);
-        if (this._stopped || !this._enabled || generation !== this._generation)
-          throw new Error("Native initialization cancelled");
-        await IOUtils.write(path, bytes, { tmpPath: path + ".tmp" });
+        if (name === "inference") {
+          const bytes = await this._packageFile("native/" + name);
+          if ((await this._checksum(bytes)) !== manifest.files[name])
+            throw new Error("Native helper checksum mismatch");
+          if (
+            this._stopped ||
+            !this._enabled ||
+            generation !== this._generation
+          )
+            throw new Error("Native initialization cancelled");
+          await IOUtils.write(path, bytes, { tmpPath: path + ".tmp" });
+        } else {
+          await this._downloadRuntime(
+            manifest.runtime,
+            path,
+            manifest.files[name],
+            generation,
+          );
+        }
       }
     }
     const command = PathUtils.join(dir, "inference");
@@ -748,6 +767,71 @@ var SWSemantic = {
       throw new Error(ready.error || "Native model did not initialize");
     this.status.backend = ready.backend;
     Zotero.debug("[related-work] Semantic backend: " + ready.backend);
+  },
+
+  async _downloadRuntime(asset, destination, checksum, generation) {
+    const checkActive = () => {
+      if (this._stopped || !this._enabled || generation !== this._generation)
+        throw new Error("Native runtime preparation cancelled");
+    };
+    checkActive();
+    this.status.state = "downloading";
+    SWIndexer._reportStatus(true);
+    const staging = await IOUtils.createUniqueDirectory(
+      PathUtils.parent(destination),
+      "download",
+      0o700,
+    );
+    const archive = PathUtils.join(staging, "runtime.tgz");
+    let process;
+    try {
+      checkActive();
+      const xhr = await Zotero.HTTP.request("GET", asset.url, {
+        responseType: "arraybuffer",
+        timeout: 180000,
+        requestObserver: (request) => this._downloads.set(archive, request),
+      });
+      checkActive();
+      const bytes = new Uint8Array(xhr.response);
+      if ((await this._checksum(bytes)) !== asset.sha256)
+        throw new Error("Native runtime archive checksum mismatch");
+      checkActive();
+      await IOUtils.write(archive, bytes);
+      checkActive();
+      this.status.state = "loading";
+      SWIndexer._reportStatus(true);
+      const { Subprocess } = ChromeUtils.importESModule(
+        "resource://gre/modules/Subprocess.sys.mjs",
+      );
+      // Extract only the verified library, using macOS's existing archive tool.
+      process = await Subprocess.call({
+        command: "/usr/bin/tar",
+        arguments: ["-xzf", archive, "-C", staging, asset.member],
+        stderr: "stdout",
+      });
+      checkActive();
+      this._extracting = process;
+      const [result, diagnostic] = await Promise.all([
+        process.wait(),
+        process.stdout.readString(),
+      ]);
+      checkActive();
+      if (result.exitCode !== 0)
+        throw new Error("Native runtime extraction failed: " + diagnostic);
+      const library = PathUtils.join(staging, ...asset.member.split("/"));
+      if ((await IOUtils.computeHexDigest(library, "sha256")) !== checksum)
+        throw new Error("Native runtime library checksum mismatch");
+      checkActive();
+      await IOUtils.move(library, destination);
+    } finally {
+      this._downloads.delete(archive);
+      if (this._extracting === process) this._extracting = null;
+      try {
+        if (process) await process.kill(0);
+      } finally {
+        await IOUtils.remove(staging, { recursive: true });
+      }
+    }
   },
 
   async _nativeReply(process, timeout = 30000) {
@@ -940,11 +1024,17 @@ var SWSemantic = {
 
   _terminate(reason) {
     const native = this._native;
+    const extracting = this._extracting;
     this._native = null;
-    if (native)
+    this._extracting = null;
+    if (native || extracting)
       this._nativeExit = Promise.allSettled([
         this._nativeExit,
-        native.kill(0).catch((error) => Zotero.logError(error)),
+        ...[native, extracting]
+          .filter(Boolean)
+          .map((process) =>
+            process.kill(0).catch((error) => Zotero.logError(error)),
+          ),
       ]).then(() => undefined);
     this._worker?.terminate();
     this._worker = null;

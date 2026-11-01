@@ -58,6 +58,13 @@ files["bootstrap.js"] = strToU8(
 var SWOriginalStartup = startup;
 startup = async function(data) {
   await Zotero.initializationPromise;
+  let runtimeDownloads = 0;
+  const request = Zotero.HTTP.request;
+  const runtimeURL = "https://github.com/microsoft/onnxruntime/releases/download/v1.22.0/onnxruntime-osx-universal2-1.22.0.tgz";
+  Zotero.HTTP.request = function(method, url, options) {
+    if (url === runtimeURL) runtimeDownloads++;
+    return request.call(this, method, url, options);
+  };
   if (${JSON.stringify(process.env.SW_HOST_NATIVE_MODEL_DIR || "")}) {
     const source = ${JSON.stringify(process.env.SW_HOST_NATIVE_MODEL_DIR || "")};
     const target = PathUtils.join(Zotero.DataDirectory.dir, "related-work", "model");
@@ -583,6 +590,43 @@ startup = async function(data) {
         semantic.pause();
         const exit = await nativeProcess.wait();
         if (semantic._native || !exit) throw new Error("Native inference leaked on pause");
+        if (runtimeDownloads !== 1) throw new Error("Fresh setup did not download the runtime once: " + runtimeDownloads);
+
+        // A valid cache must work with network access disabled.
+        Zotero.HTTP.request = function() { throw new Error("Unexpected download with valid caches"); };
+        semantic._enabled = true;
+        await semantic._init();
+        const cached = await semantic._encode(["Spectral hashing for similarity search."]);
+        const cosine = (a,b) => a.reduce((sum,n,i)=>sum+n*b[i],0);
+        if (cosine(encoded.vectors[0],cached.vectors[0]) < 0.99999) throw new Error("Cached runtime changed embeddings");
+        semantic.pause();
+        await semantic._nativeExit;
+        Zotero.HTTP.request = function(method, url, options) {
+          if (url === runtimeURL) runtimeDownloads++;
+          return request.call(this, method, url, options);
+        };
+
+        // Repair a damaged runtime without invalidating the model or vector cache.
+        const runtimeDir = PathUtils.join(Zotero.DataDirectory.dir,"related-work","runtime");
+        await IOUtils.writeUTF8(PathUtils.join(runtimeDir,"libonnxruntime.1.22.0.dylib"),"damaged");
+        semantic._enabled = true;
+        await semantic._init();
+        if (runtimeDownloads !== 2) throw new Error("Damaged runtime was not downloaded again");
+        const repaired = await semantic._encode(["Spectral hashing for similarity search."]);
+        if (cosine(encoded.vectors[0],repaired.vectors[0]) < 0.99999) throw new Error("Repaired runtime changed embeddings");
+        for (const paper of [item,...peers]) {
+          const key = SWScope.SWIndexer.docKey(paper);
+          semantic.forget(key);
+          await semantic._build(key);
+        }
+        const again = await semantic.recommend(queryKey,10,key=>key.startsWith(item.libraryID+"/"));
+        if (JSON.stringify(hybrid.matches.map(m=>m.key)) !== JSON.stringify(again?.matches.map(m=>m.key))) throw new Error("Runtime repair changed recommendation ranks");
+        if ((await IOUtils.getChildren(runtimeDir)).some(path=>PathUtils.filename(path).startsWith("download"))) throw new Error("Runtime setup left temporary archives");
+        result.runtimeDownload = "fresh, offline reuse and corruption recovery passed";
+        result.runtimeMinimumCosine = Math.min(cosine(encoded.vectors[0],cached.vectors[0]),cosine(encoded.vectors[0],repaired.vectors[0]));
+        result.runtimeRanking = "unchanged";
+        semantic.pause();
+        await semantic._nativeExit;
       }
 
       // Pause background work before checking foreground priority.
@@ -656,6 +700,7 @@ startup = async function(data) {
         throw new Error("Shutdown leaked resources");
       result.ok = true;
     } catch (error) { result.error = String(error) + "\\n" + error.stack; }
+    Zotero.HTTP.request = request;
     await IOUtils.writeUTF8(${JSON.stringify(marker)}, JSON.stringify(result));
     Services.startup.quit(Components.interfaces.nsIAppStartup.eAttemptQuit);
   }, 1000);
@@ -684,7 +729,7 @@ try {
     new Promise((_, reject) => {
       timeout = setTimeout(
         () => reject(new Error("Zotero host test timed out")),
-        90000,
+        process.env.SW_HOST_NATIVE_MODEL_DIR ? 300000 : 90000,
       );
     }),
   ]);
@@ -694,6 +739,15 @@ try {
   console.log(
     "PASS Local text and AI semantic retrieval, no generative AI runtime/settings, tag filtering and native operations, indexing progress and shutdown cleanup.",
   );
+  if (result.runtimeDownload)
+    console.log(
+      JSON.stringify({
+        runtimeDownload: result.runtimeDownload,
+        backend: result.nativeBackend,
+        minimumCosine: result.runtimeMinimumCosine,
+        ranking: result.runtimeRanking,
+      }),
+    );
   passed = true;
 } finally {
   clearTimeout(timeout);

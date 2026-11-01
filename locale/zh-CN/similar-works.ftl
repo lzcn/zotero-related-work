@@ -27,8 +27,8 @@ similar-works-pref-index-heading = 状态
 similar-works-pref-index = 文献整理
 similar-works-pref-error = 准备失败，请重启 Zotero。
 similar-works-pref-index-value = { $known ->
-    [1] { $phase } · 已处理 { $count } / { $total } 篇
-   *[0] { $phase } · 已处理 { $count } 篇
+    [1] { $phase } · { $count } / { $total }
+   *[0] { $phase } · { $count }
     }
 similar-works-pref-index-progress =
     .aria-label = 文本索引进度
@@ -153,9 +153,9 @@ similar-works-graph-years =
 similar-works-tags-clear-selection =
     .label = 清除选择
 
-similar-works-pref-vectors = 相关文献匹配
+similar-works-pref-vectors = 语义匹配
 
-similar-works-pref-vector-value = { $phase } · 已处理 { $count } / { $total } 篇
+similar-works-pref-vector-value = { $phase } · { $count } / { $total }
 
 similar-works-pref-vector-progress =
     .aria-label = 相关文献匹配进度

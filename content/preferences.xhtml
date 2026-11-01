@@ -6,7 +6,7 @@
   onshowing="window.SimilarWorksPreferences.start(document)"
 >
   <vbox class="main-section">
-    <hbox align="center">
+    <hbox class="preference-row" align="center">
       <label
         control="similar-works-limit"
         data-l10n-id="similar-works-pref-limit"
@@ -16,7 +16,7 @@
         type="number"
         min="1"
         max="100"
-        style="width: 5em"
+        class="preference-number"
         preference="extensions.zotero.similar-works.maxRecommendations"
       />
     </hbox>
@@ -28,7 +28,7 @@
   </vbox>
   <vbox class="main-section">
     <html:h3 data-l10n-id="similar-works-pref-tags-heading" />
-    <hbox align="center">
+    <hbox class="preference-row" align="center">
       <label
         control="similar-works-tag-style"
         data-l10n-id="similar-works-pref-tag-style"
@@ -59,49 +59,40 @@
       data-l10n-id="similar-works-pref-exclude-colored-tags"
       preference="extensions.zotero.similar-works.excludeColoredTags"
     />
-    <label
-      control="similar-works-excluded-tags"
-      data-l10n-id="similar-works-pref-excluded-tags"
-    />
-    <html:textarea
-      id="similar-works-excluded-tags"
-      rows="3"
-      style="width: 100%; box-sizing: border-box"
-      preference="extensions.zotero.similar-works.excludedTags"
-      aria-describedby="similar-works-excluded-tags-help"
-    />
+    <hbox class="preference-row" align="start">
+      <label
+        control="similar-works-excluded-tags"
+        data-l10n-id="similar-works-pref-excluded-tags"
+      />
+      <html:textarea
+        id="similar-works-excluded-tags"
+        rows="2"
+        preference="extensions.zotero.similar-works.excludedTags"
+        aria-describedby="similar-works-excluded-tags-help"
+      />
+    </hbox>
     <description
       id="similar-works-excluded-tags-help"
+      class="preference-help"
       data-l10n-id="similar-works-pref-excluded-tags-help"
     />
   </vbox>
   <vbox class="main-section" id="similar-works-diagnostics">
     <html:h3 data-l10n-id="similar-works-pref-index-heading" />
-    <html:dl
-      style="
-        display: grid;
-        grid-template-columns: max-content minmax(0, 1fr);
-        gap: 10px 24px;
-        margin: 0;
-      "
-    >
+    <html:dl class="preference-status">
       <html:dt data-l10n-id="similar-works-pref-index" /><html:dd
-        style="margin: 0"
         ><html:span id="similar-works-index" />
         <html:progress
           id="similar-works-index-progress"
           hidden="hidden"
-          style="display: block; width: 100%; max-width: 360px; margin-top: 6px"
           data-l10n-id="similar-works-pref-index-progress"
         />
       </html:dd>
       <html:dt data-l10n-id="similar-works-pref-vectors" /><html:dd
-        style="margin: 0"
         ><html:span id="similar-works-vectors" />
         <html:progress
           id="similar-works-vector-progress"
           hidden="hidden"
-          style="display: block; width: 100%; max-width: 360px; margin-top: 6px"
           data-l10n-id="similar-works-pref-vector-progress"
         />
       </html:dd>

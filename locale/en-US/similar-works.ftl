@@ -27,8 +27,8 @@ similar-works-pref-index-heading = Status
 similar-works-pref-index = Library preparation
 similar-works-pref-error = Preparation failed. Restart Zotero.
 similar-works-pref-index-value = { $known ->
-    [1] { $phase } · { $count } of { $total } papers processed
-   *[0] { $phase } · { $count } papers processed
+    [1] { $phase } · { $count } / { $total }
+   *[0] { $phase } · { $count }
     }
 similar-works-pref-index-progress =
     .aria-label = Text indexing progress
@@ -153,9 +153,9 @@ similar-works-graph-years =
 similar-works-tags-clear-selection =
     .label = Clear selection
 
-similar-works-pref-vectors = Related paper matching
+similar-works-pref-vectors = Semantic matching
 
-similar-works-pref-vector-value = { $phase } · { $count } of { $total } papers processed
+similar-works-pref-vector-value = { $phase } · { $count } / { $total }
 
 similar-works-pref-vector-progress =
     .aria-label = Related paper matching progress
