@@ -373,7 +373,7 @@
     labels.sort(
       (a, b) => b.priority - a.priority || b.node.radius - a.node.radius,
     );
-    ctx.font = "12px system-ui";
+    ctx.font = "12px " + window.getComputedStyle(canvas).fontFamily;
     ctx.textBaseline = "middle";
     const occupied = new Set();
     for (const { node, p } of labels) {

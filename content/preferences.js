@@ -8,6 +8,34 @@ window.SimilarWorksPreferences = (() => {
     generation++;
     window.clearTimeout(timer);
   };
+  function renderProgress(doc, status) {
+    for (const [id, total, done, enabled] of [
+      [
+        "similar-works-index-progress",
+        status.state === "scanning" && status.totalItems === null
+          ? 0
+          : (status.totalItems ?? status.indexProgress.total),
+        status.indexProgress.phase === "loading"
+          ? status.indexProgress.done
+          : status.indexedItems,
+        ["preparing", "scanning", "indexing"].includes(status.state),
+      ],
+      [
+        "similar-works-vector-progress",
+        status.vectorTotal,
+        status.semantic.indexedItems,
+        !["disabled", "idle", "stopped"].includes(status.semantic.state),
+      ],
+    ]) {
+      const bar = doc.getElementById(id);
+      bar.hidden = !enabled;
+      if (total > 0) {
+        bar.max = total;
+        bar.value = Math.min(done, total);
+      } else bar.removeAttribute("value");
+    }
+  }
+
   async function start(doc) {
     stop();
     const token = generation;
@@ -45,31 +73,7 @@ window.SimilarWorksPreferences = (() => {
           "similar-works-vectors": vectorText,
         }))
           doc.getElementById(id).textContent = text;
-        for (const [id, total, done, enabled] of [
-          [
-            "similar-works-index-progress",
-            status.state === "scanning" && status.totalItems === null
-              ? 0
-              : (status.totalItems ?? status.indexProgress.total),
-            status.indexProgress.phase === "loading"
-              ? status.indexProgress.done
-              : status.indexedItems,
-            ["preparing", "scanning", "indexing"].includes(status.state),
-          ],
-          [
-            "similar-works-vector-progress",
-            status.vectorTotal,
-            status.semantic.indexedItems,
-            !["disabled", "idle", "stopped"].includes(status.semantic.state),
-          ],
-        ]) {
-          const bar = doc.getElementById(id);
-          bar.hidden = !enabled;
-          if (total > 0) {
-            bar.max = total;
-            bar.value = Math.min(done, total);
-          } else bar.removeAttribute("value");
-        }
+        renderProgress(doc, status);
         const error = doc.getElementById("similar-works-diagnostics-error");
         error.textContent =
           status.error || status.semantic.error

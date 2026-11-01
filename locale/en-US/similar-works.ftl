@@ -25,7 +25,7 @@ similar-works-pref-metadata =
 
 similar-works-pref-index-heading = Status
 similar-works-pref-index = Library preparation
-similar-works-pref-error = Preparation failed. Restart Zotero to retry.
+similar-works-pref-error = Preparation failed. Restart Zotero.
 similar-works-pref-index-value = { $known ->
     [1] { $phase } · { $count } of { $total } papers processed
    *[0] { $phase } · { $count } papers processed
@@ -79,7 +79,7 @@ similar-works-pref-exclude-colored-tags =
     .label = Exclude colored tags
 similar-works-pref-excluded-tags =
     .value = Excluded tags
-similar-works-pref-excluded-tags-help = One name per line; includes naming variants.
+similar-works-pref-excluded-tags-help = One per line; also excludes name variants.
 similar-works-tags-protected = Tag excluded. Check Settings.
 
 similar-works-tags-select-all = Select all
@@ -89,14 +89,17 @@ similar-works-tags-selection-count = { $visible } / { $total } · Selected { $se
        *[other] · { $hidden } hidden
     }
 similar-works-tags-action = Action
-similar-works-tags-format = Rename
-similar-works-tags-merge-action = Merge
+similar-works-tags-format =
+    .label = Rename
+similar-works-tags-merge-action =
+    .label = Merge
 similar-works-tags-preparing = Preparing preview…
 similar-works-tags-format-preview = { $count } renames · { $items } items · { $merges } merges
 similar-works-tags-formatted = Formatted { $count } tags.
 similar-works-tags-no-matches = No matching tags.
 
-similar-works-tags-delete-action = Delete
+similar-works-tags-delete-action =
+    .label = Delete
 
 similar-works-tags-delete-button =
     .label = Delete
@@ -167,7 +170,8 @@ similar-works-tags-new = New
 similar-works-tags-name-column = Name
 similar-works-tags-count-column = Items
 similar-works-tags-group-column = Match
-similar-works-tags-format-action = Format names
+similar-works-tags-format-action =
+    .label = Format names
 similar-works-tags-match-name = Name
 similar-works-tags-match-plural = Plural
 similar-works-tags-match-abbreviation = Abbreviation

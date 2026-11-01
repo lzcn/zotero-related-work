@@ -18,6 +18,8 @@ Requires Zotero 10. Download the XPI from [Releases](https://github.com/lzcn/zot
 
 Settings control tag naming and protected tags. Recommendations combine text matching with local semantic matching on macOS. First use downloads about 90 MB of model weights plus tokenizer files; text results remain available during preparation and on other platforms. Semantic matching mainly supports English papers. The similarity graph is currently unavailable.
 
+The interface uses a fixed Bear-inspired palette with compact recommendation lists and tag tables. Colors follow the system’s light or dark appearance; Settings use Zotero’s native controls.
+
 ## Data
 
 Rebuildable caches live under `related-work/` in the Zotero data directory. The plugin leaves Zotero's original full-text database unchanged. Tag operations update native Zotero tags.

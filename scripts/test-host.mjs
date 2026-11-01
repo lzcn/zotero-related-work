@@ -36,6 +36,10 @@ const prefs = {
   "app.update.auto": false,
   "extensions.update.enabled": false,
 };
+if (process.env.SW_HOST_COLOR_SCHEME) {
+  prefs["ui.systemUsesDarkTheme"] =
+    process.env.SW_HOST_COLOR_SCHEME === "dark" ? 1 : 0;
+}
 await writeFile(
   join(profile, "user.js"),
   Object.entries(prefs)
@@ -78,6 +82,57 @@ startup = async function(data) {
       await SWOriginalStartup(data);
       if (SWScope.SWSection._registered !== registered) throw new Error("Duplicate registration");
       const doc = Zotero.getMainWindow().document;
+      const auditUI=(view,scope=view.document)=>{
+        for(const control of scope.querySelectorAll('button, toolbarbutton, menulist, checkbox')) {
+          const box=control.getBoundingClientRect();
+          if(!box.width || !box.height || view.getComputedStyle(control).visibility==='hidden')continue;
+          const native=control.namespaceURI==='http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul';
+          const text=(control.getAttribute('label') || control.textContent || '').trim();
+          if(!text && !control.getAttribute('aria-label') && !control.getAttribute('tooltiptext') && !control.getAttribute('title') && !control.getAttribute('image') && control.localName!=='menulist')throw new Error('Unnamed control: '+control.id);
+          const label=native && control.shadowRoot?.querySelector('.button-text, .toolbarbutton-text, .menulist-label, .checkbox-label');
+          if(label && text) {
+            const bounds=label.getBoundingClientRect();
+            if(bounds.height && (bounds.top<box.top-2 || bounds.bottom>box.bottom+2))throw new Error('Clipped native control text: '+control.id+': '+text);
+            if(control.localName==='button' && bounds.width && (bounds.left<box.left-2 || bounds.right>box.right+2 || label.scrollWidth>label.clientWidth+2))throw new Error('Clipped native button label: '+control.id+': '+text);
+          }
+          if(!native && text && !control.matches('.sw-row')) {
+            const line=parseFloat(view.getComputedStyle(control).lineHeight);
+            if(Number.isFinite(line) && control.clientHeight+2<line)throw new Error('Control is shorter than its text: '+control.id+': '+text);
+          }
+        }
+      };
+      const checkFixedStyle = (view, surface) => {
+        const root = view.document.documentElement;
+        const originalAttribute = root.hasAttribute('data-plugin-bear');
+        const originalFont = root.style.getPropertyValue('--ui-font');
+        const originalAccent = root.style.getPropertyValue('--ui-accent');
+        try {
+          root.style.setProperty('--ui-font', '"Avenir Next"');
+          root.style.setProperty('--ui-accent', '#123456');
+          for (const bear of [true, false]) {
+            Zotero.Prefs.set('extensions.zotero.plugin-ui.bear', bear, true);
+            root.toggleAttribute('data-plugin-bear', bear);
+            const style = view.getComputedStyle(surface);
+            const accent = view.matchMedia('(prefers-color-scheme: dark)').matches ? '#d58e97' : '#aa5962';
+            if (style.getPropertyValue('--ui-accent').trim() !== accent || style.fontFamily.includes('Avenir Next')) throw new Error('Task appearance changed with the shared preference or host styles');
+          }
+        } finally {
+          root.toggleAttribute('data-plugin-bear', originalAttribute);
+          if (originalFont) root.style.setProperty('--ui-font', originalFont); else root.style.removeProperty('--ui-font');
+          if (originalAccent) root.style.setProperty('--ui-accent', originalAccent); else root.style.removeProperty('--ui-accent');
+        }
+      };
+      const capture = async (name, window) => {
+        for(const root of window.document.querySelectorAll('.plugin-preferences, #tag-manager, .sw-list, .sw-tags'))auditUI(window,root);
+        const folder = ${JSON.stringify(process.env.SW_HOST_SCREENSHOTS || "")};
+        if (!folder) return;
+        await IOUtils.makeDirectory(folder, {ignoreExisting:true});
+        const image = await window.browsingContext.currentWindowGlobal.drawSnapshot(undefined,1,"white");
+        const canvas = window.document.createElementNS("http://www.w3.org/1999/xhtml","canvas");
+        canvas.width=image.width;canvas.height=image.height;canvas.getContext('2d').drawImage(image,0,0);image.close();
+        const blob=await new Promise(resolve=>canvas.toBlob(resolve));
+        await IOUtils.write(PathUtils.join(folder,name+'.png'),new Uint8Array(await blob.arrayBuffer()));
+      };
       if (doc.querySelectorAll("#similar-works-style").length !== 1) throw new Error("Duplicate stylesheet");
       const item = new Zotero.Item("journalArticle");
       item.libraryID = Zotero.Libraries.userLibraryID;
@@ -184,12 +239,35 @@ startup = async function(data) {
       }
       await peers[0].saveTx({skipSelect:true});
       await peers[1].saveTx({skipSelect:true});
+      const checkActionControl = (win, value) => {
+        const control=win.document.getElementById('mode');
+        const rect=control.getBoundingClientRect();
+        const footer=control.closest('footer').getBoundingClientRect();
+        if(control.localName!=='menulist' || control.getAttribute('native')!=='true' || control.value!==value || !control.selectedItem?.getAttribute('label'))throw new Error('The native action picker lost its selection or localized label');
+        if(rect.width<140 || rect.height<22 || rect.right>footer.right+1 || rect.bottom>footer.bottom+1)throw new Error('Tag action picker is clipped: '+JSON.stringify({rect:rect.toJSON(),footer:footer.toJSON()}));
+        const arrow=control.shadowRoot?.querySelector('dropmarker') || control.querySelector('dropmarker');
+        if(arrow && arrow.getBoundingClientRect().right>rect.right+1)throw new Error('Tag action arrow extends outside its control');
+      };
+      const chooseAction=async(win,value)=>{
+        const control=win.document.getElementById('mode');
+        const popup=control.querySelector('menupopup');
+        win.focus();control.open=true;
+        await waitFor(()=>popup.state==='open','open action picker');
+        popup.activateItem(popup.querySelector('[value="'+value+'"]'));
+        await waitFor(()=>control.value===value && popup.state==='closed','select native action');
+        checkActionControl(win,value);
+      };
       const managedTagCount = (await tagAPI.catalog(item.libraryID, true)).length;
       const tagDialog = tagAPI.open(doc.defaultView, item.libraryID);
       await waitFor(() => tagDialog.document?.querySelectorAll('#tags input').length === managedTagCount, 'load all tag dialog rows');
       await tagDialog.document.l10n.ready;
       testTagWindows.push(tagDialog);
       const td = tagDialog.document;
+      await waitFor(() => tagDialog.getComputedStyle(td.getElementById('sort-name')).backgroundColor==='rgba(0, 0, 0, 0)', 'flat sortable headings');
+      if (td.querySelector('.tag').getBoundingClientRect().height<30 || td.getElementById('sort-name').getBoundingClientRect().height<28) throw new Error('Tag rows or sorting labels are cramped');
+      checkActionControl(tagDialog,'merge');
+      await capture('tag-manager',tagDialog);
+      checkFixedStyle(tagDialog, td.getElementById('tag-manager'));
       for (const name of ["Deep Learning", "deep-learning"]) {
         const input = [...td.querySelectorAll('#tags input')].find(input => input.value === name);
         if (input?.closest('tr').querySelector('.tag-count')?.textContent.trim() !== "2") throw new Error("Tag usage count did not include native note/manual/automatic membership: " + name);
@@ -208,6 +286,7 @@ startup = async function(data) {
       const firstTag = td.querySelector('#tags input');
       firstTag.click();
       await waitFor(() => !td.getElementById('clear-selection').disabled, 'enable clear selection');
+      await capture('tag-manager-selected',tagDialog);
       if (!td.getElementById('merge').disabled) throw new Error("Merge accepted a single tag");
       const selectedName = firstTag.value;
       td.getElementById('sort-name').click();
@@ -224,8 +303,7 @@ startup = async function(data) {
       td.getElementById('search').value = "deep";
       td.getElementById('search').dispatchEvent(new tagDialog.Event('input', {bubbles:true}));
       await waitFor(() => td.querySelectorAll('#tags input').length === 2, 'restore manual candidates');
-      td.getElementById('mode').value = "merge";
-      td.getElementById('mode').dispatchEvent(new tagDialog.Event("change",{bubbles:true}));
+      await chooseAction(tagDialog,"merge");
       await waitFor(() => td.querySelectorAll('#tags input').length >= 2, 'render merge action');
       for (const checkbox of td.querySelectorAll('#tags input')) {
         checkbox.checked = true;
@@ -286,8 +364,7 @@ startup = async function(data) {
       td.getElementById('search').value = "odd";
       td.getElementById('refresh').click();
       await waitFor(() => td.querySelector('#tags input')?.value === "odd   tag", 'load normalization candidate');
-      td.getElementById("mode").value = "rename";
-      td.getElementById("mode").dispatchEvent(new tagDialog.Event("change",{bubbles:true}));
+      await chooseAction(tagDialog,"rename");
       await waitFor(() => td.querySelector('#tags input')?.value === "odd   tag", "render single rename");
       const normalize = td.querySelector('#tags input');
       normalize.checked = true;
@@ -336,6 +413,10 @@ startup = async function(data) {
         const blob = await new Promise(resolve => canvas.toBlob(resolve, "image/png"));
         await IOUtils.write(${JSON.stringify(process.env.SW_HOST_SCREENSHOT || "")}, new Uint8Array(await blob.arrayBuffer()));
       }
+      await capture('settings',settings);
+      if (settings.getComputedStyle(limit).fontFamily.includes('Avenir Next')) throw new Error('Settings inherited the Bear font');
+      if([...settings.document.styleSheets].some(sheet=>sheet.href?.includes('similar-works/content/ui.css')))throw new Error('Settings loaded the operational theme stylesheet');
+      if (settings.document.getElementById('similar-works-ui-style')) throw new Error('Settings expose an appearance picker');
       mainWindow.similarWorksStatus = originalStatus;
       limit.value = "15";
       limit.dispatchEvent(new settings.Event("change", { bubbles: true }));
@@ -370,8 +451,7 @@ startup = async function(data) {
       const formatDialog = tagAPI.open(doc.defaultView,item.libraryID);
       await waitFor(() => ["format HTTP parser","#format_HTTP_parser"].every(name => [...(formatDialog.document?.querySelectorAll('#tags input') || [])].some(input => input.value === name)), 'load naming variants');
       const fd = formatDialog.document;
-      fd.getElementById("mode").value = "format";
-      fd.getElementById("mode").dispatchEvent(new formatDialog.Event("change",{bubbles:true}));
+      await chooseAction(formatDialog,"format");
       await waitFor(() => ["format HTTP parser","#format_HTTP_parser"].every(name => [...fd.querySelectorAll('#tags input')].some(input => input.value === name)), 'render format rows');
       for (const checkbox of [...fd.querySelectorAll('#tags input')].filter(input=>["format HTTP parser","#format_HTTP_parser"].includes(input.value))) {
         checkbox.checked = true;
@@ -399,8 +479,7 @@ startup = async function(data) {
         if (bd.activeElement !== bd.getElementById("search")) throw new Error("Command-F did not focus tag search");
       }
       if (bd.getElementById("mode").value !== "merge") throw new Error("Wrong default tag action");
-      bd.getElementById("mode").value = "format";
-      bd.getElementById("mode").dispatchEvent(new bulkDialog.Event("change",{bubbles:true}));
+      await chooseAction(bulkDialog,"format");
       if ([...bd.querySelectorAll('#tags input')].some(input=>['Deep Learning','Graph Neural Networks'].includes(input.value))) throw new Error('Protected tags were visible');
       bd.getElementById('search').value = "BulkTag";
       bd.getElementById('search').dispatchEvent(new bulkDialog.Event("input",{bubbles:true}));
@@ -428,8 +507,7 @@ startup = async function(data) {
       bd.getElementById("search").value = "#BulkTag";
       bd.getElementById("search").dispatchEvent(new bulkDialog.Event("input",{bubbles:true}));
       await waitFor(() => bd.querySelectorAll("#tags input").length === 230, "render formatted tags for deletion");
-      bd.getElementById("mode").value = "delete";
-      bd.getElementById("mode").dispatchEvent(new bulkDialog.Event("change",{bubbles:true}));
+      await chooseAction(bulkDialog,"delete");
       await waitFor(() => bd.querySelectorAll("#tags input").length === 230, "render deletion action");
       const deletionInputs = [...bd.querySelectorAll("#tags input")];
       const removedNames = deletionInputs.slice(0,2).map(input=>input.value);
@@ -439,6 +517,19 @@ startup = async function(data) {
       await waitFor(() => !bd.getElementById("refresh").disabled, "finish delete");
       if (removedNames.some(name=>peers[0].hasTag(name)) || peers[0].getTags().filter(tag=>tag.tag.startsWith("#BulkTag")).length !== 228) throw new Error("Bulk deletion did not preserve unselected tags");
       if (!peers[0].hasTag("Deep Learning") || taggedNote.getNote() !== noteBeforeMerge || peers[0].deleted) throw new Error("Deletion changed protected tags or items");
+      const deletedText=await bd.l10n.formatValue('similar-works-tags-deleted',{count:2});
+      await waitFor(()=>!bd.getElementById('mode').disabled && bd.getElementById('preview').textContent===deletedText,'restore action picker after deletion');
+      for(const width of [680,440]) {
+        bulkDialog.resizeTo(width,560);await new Promise(resolve=>setTimeout(resolve,100));
+        checkActionControl(bulkDialog,'delete');
+        await capture(width===680?'tag-manager-after-delete':'tag-manager-narrow-delete',bulkDialog);
+      }
+      bd.getElementById('tag-manager').style.fontSize='18px';
+      checkActionControl(bulkDialog,'delete');
+      await capture('tag-manager-large-text',bulkDialog);
+      bd.getElementById('tag-manager').style.fontSize='';
+      await chooseAction(bulkDialog,'merge');
+      await waitFor(()=>!bd.getElementById('target').hidden,'reuse action picker after deletion');
       bulkDialog.dispatchEvent(new bulkDialog.KeyboardEvent("keydown",{key:"w",metaKey:!!Zotero.isMac,ctrlKey:!Zotero.isMac,cancelable:true}));
       await waitFor(() => bulkDialog.closed, "Command-W close tag dialog");
       const corpus = SWScope.SWIndexer.corpus;
@@ -528,12 +619,16 @@ startup = async function(data) {
       const sourceCard = navigationBody.querySelector(".sw-source");
       await doc.l10n.translateFragment(sourceCard);
       if (sourceCard.querySelector(".sw-title").textContent !== item.getField("title")) throw new Error("Wrong navigation source");
+      if (doc.defaultView.getComputedStyle(sourceCard).borderRadius!=='0px') throw new Error('Source navigation still uses a rounded card');
+      await capture('sidebar',doc.defaultView);
+      checkFixedStyle(doc.defaultView, navigationBody.querySelector('.sw-list'));
+      checkFixedStyle(doc.defaultView, sourceCard);
       if (!sourceCard.querySelector(".sw-source-label").textContent) throw new Error("Missing source localization");
       if (!section.querySelector("collapsible-section").open) throw new Error("Related Work collapsed after navigation");
       const details = section.closest("item-details");
       if (!details.isPaneVisible(section.dataset.pane)) throw new Error("Related Work is not visible after navigation");
       const sourceStyle = doc.defaultView.getComputedStyle(sourceCard);
-      if (parseFloat(sourceStyle.borderInlineStartWidth) !== 3 || sourceCard.getBoundingClientRect().height < 30) throw new Error("Source card styling failed");
+      if (parseFloat(sourceStyle.borderInlineStartWidth) < 2 || sourceCard.getBoundingClientRect().height < 30) throw new Error("Source card styling failed");
       sourceCard.click();
       await waitFor(() => Zotero.getActiveZoteroPane().getSelectedItems()[0]?.id === item.id
         && sourceCard.querySelector(".sw-title")?.textContent === peers[0].getField("title"), "return to source");

@@ -1,21 +1,24 @@
+@import url("chrome://similar-works/content/ui.css");
+
 :root {
   color-scheme: light dark;
-  font: message-box;
 }
 body {
+  font: 13px/1.5 var(--ui-font);
   margin: 0;
   height: 100vh;
   display: flex;
   flex-direction: column;
-  color: var(--text-primary, CanvasText);
-  background: var(--material-background, Canvas);
+  color: var(--ui-fg);
+  background: var(--ui-bg);
 }
 header {
   display: flex;
   gap: 8px;
   align-items: center;
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--fill-secondary, #8884);
+  padding: 8px 12px;
+  background: var(--ui-surface);
+  border-bottom: 1px solid var(--ui-border);
 }
 button,
 input {
@@ -49,21 +52,21 @@ canvas {
   touch-action: none;
 }
 canvas:focus-visible {
-  outline: 2px solid var(--accent-blue, #3478f6);
+  outline: 2px solid var(--ui-accent);
   outline-offset: -2px;
 }
 #empty {
   position: absolute;
   inset: 45% 16px auto;
   text-align: center;
-  color: var(--text-secondary, GrayText);
+  color: var(--ui-muted);
   pointer-events: none;
 }
 #splitter {
   width: 5px;
   flex: none;
   cursor: col-resize;
-  background: var(--fill-secondary, #8883);
+  background: var(--ui-border);
   touch-action: none;
 }
 aside {
@@ -76,7 +79,8 @@ aside {
   overflow-wrap: anywhere;
 }
 h2 {
-  font-size: 17px;
+  font-size: 16px;
+  font-weight: 550;
   margin: 0 0 8px;
 }
 h3 {
@@ -86,7 +90,7 @@ p {
   line-height: 1.5;
 }
 .muted {
-  color: var(--text-secondary, GrayText);
+  color: var(--ui-muted);
   font-size: 12px;
 }
 #node-abstract {
@@ -106,13 +110,16 @@ p {
   height: auto;
   max-height: none;
   white-space: normal;
+  border-radius: 0;
+  box-shadow: inset 0 -1px var(--ui-border);
 }
 #connections button:hover {
-  color: var(--accent-blue, #3478f6);
+  color: var(--ui-accent);
+  background: var(--ui-hover);
 }
 #connections span:last-child {
   flex: none;
-  color: var(--accent-blue, #3478f6);
+  color: var(--ui-accent);
   font-variant-numeric: tabular-nums;
 }
 footer {
@@ -120,7 +127,7 @@ footer {
   gap: 12px;
   align-items: center;
   padding: 8px 12px;
-  border-top: 1px solid var(--fill-secondary, #8884);
+  border-top: 1px solid var(--ui-border);
   font-size: 12px;
 }
 footer progress {
@@ -128,7 +135,7 @@ footer progress {
   height: 5px;
 }
 #status {
-  color: var(--text-secondary, GrayText);
+  color: var(--ui-muted);
 }
 [hidden] {
   display: none !important;

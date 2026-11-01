@@ -71,25 +71,32 @@ type="text/css"?>
       ></table>
     </main>
     <footer>
-      <label for="mode" data-l10n-id="similar-works-tags-action"></label>
-      <select id="mode">
-        <option
-          value="merge"
-          data-l10n-id="similar-works-tags-merge-action"
-        ></option>
-        <option
-          value="rename"
-          data-l10n-id="similar-works-tags-format"
-        ></option>
-        <option
-          value="delete"
-          data-l10n-id="similar-works-tags-delete-action"
-        ></option>
-        <option
-          value="format"
-          data-l10n-id="similar-works-tags-format-action"
-        ></option>
-      </select>
+      <label id="mode-label" data-l10n-id="similar-works-tags-action"></label>
+      <xul:menulist
+        id="mode"
+        native="true"
+        value="merge"
+        aria-labelledby="mode-label"
+      >
+        <xul:menupopup>
+          <xul:menuitem
+            value="merge"
+            data-l10n-id="similar-works-tags-merge-action"
+          />
+          <xul:menuitem
+            value="rename"
+            data-l10n-id="similar-works-tags-format"
+          />
+          <xul:menuitem
+            value="delete"
+            data-l10n-id="similar-works-tags-delete-action"
+          />
+          <xul:menuitem
+            value="format"
+            data-l10n-id="similar-works-tags-format-action"
+          />
+        </xul:menupopup>
+      </xul:menulist>
       <label
         id="target-label"
         hidden="hidden"

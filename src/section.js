@@ -1,55 +1,39 @@
 var SW_CSS = `
-/* Keep result text out of the native sidebar's intrinsic width calculation. */
-.sw-list { contain: inline-size; min-width: 0; display: flex; flex-direction: column; gap: 3px; padding: 2px 0; }
-.sw-computation-progress { display: block; width: calc(100% - 12px); height: 4px; margin: 3px 6px 7px; accent-color: var(--accent-blue, #3874d8); }
-.sw-computation-progress[hidden] { display: none; }
-.sw-status { padding: 4px 6px; color: var(--text-secondary, gray); font-size: 12px; }
-.sw-row {
-	display: flex; align-items: flex-start; gap: 10px;
-	padding: 6px 8px; border-radius: 6px; cursor: pointer;
-}
-.sw-row { border: 0; background: transparent; text-align: start; font: inherit; color: inherit; width: 100%; }
-/* Zotero's native button rule caps max-height at 25px. Recommendation rows
-   must grow with their title and metadata, including in XUL main windows. */
-.sw-list > button.sw-row { appearance: none; box-sizing: border-box; height: auto;
-	max-height: none; min-height: 0; min-width: 0; margin: 0; flex-shrink: 0; white-space: normal; }
-.sw-source { display: block; box-sizing: border-box; width: 100%; height: auto; max-height: none;
-  margin: 4px 0 8px; padding: 8px; text-align: start; white-space: normal;
-  border: 1px solid var(--accent-blue, #3874d8); border-inline-start-width: 3px;
-  border-radius: 6px; background: light-dark(#edf4ff, #24354d); color: inherit; cursor: pointer; }
-.sw-source[hidden] { display: none; }
-.sw-source-label { display: block; color: var(--accent-blue, #3874d8); font-size: 11px; margin-bottom: 3px; }
-.sw-source:focus-visible, .sw-row:focus-visible { outline: 2px solid var(--accent-blue, #3874d8); }
-.sw-rank { min-width: 14px; padding-top: 3px; font-size: 11px; color: var(--text-secondary, gray); }
-.sw-row:hover { background: var(--fill-quinary, rgba(127, 127, 127, 0.12)); }
-.sw-row:active { background: var(--fill-quaternary, rgba(127, 127, 127, 0.2)); }
+@import url("chrome://similar-works/content/ui.css");
+/* Constrain result text without changing Zotero's native sidebar geometry. */
+.sw-list { contain: inline-size; min-width: 0; display: flex; flex-direction: column; padding: 4px 0; font: 13px/1.4 var(--ui-font); color: var(--ui-fg); }
+.sw-computation-progress { display: block; width: calc(100% - 16px); height: 4px; margin: 4px 8px 8px; accent-color: var(--ui-accent); }
+.sw-computation-progress[hidden], .sw-source[hidden], .sw-tags[hidden] { display: none; }
+.sw-status { padding: 6px 8px; color: var(--ui-muted); font-size: 12px; }
+.sw-row { position: relative; display: flex; align-items: flex-start; gap: 8px; padding: 9px 8px; border: 0; border-radius: 0; background: transparent; text-align: start; font: inherit; color: inherit; width: 100%; cursor: pointer; }
+/* Native button height limits must not clip wrapped recommendation titles. */
+.sw-list > button.sw-row { appearance: none; box-sizing: border-box; height: auto; max-height: none; min-height: 0; min-width: 0; margin: 0; flex-shrink: 0; white-space: normal; }
+.sw-row::after { content: ""; position: absolute; inset-inline: 8px; bottom: 0; height: 1px; background: var(--ui-border); pointer-events: none; }
+.sw-row:last-child::after { display: none; }
+.sw-row:hover { background: var(--ui-hover); }
+.sw-row:active { background: var(--ui-active); }
+.sw-source { display: block; box-sizing: border-box; width: 100%; height: auto; max-height: none; margin: 4px 0 8px; padding: 8px 10px; text-align: start; white-space: normal; border: 0; border-inline-start: 2px solid var(--ui-accent); border-radius: 0; background: var(--ui-active); color: var(--ui-fg); font: 13px/1.4 var(--ui-font); cursor: pointer; }
+.sw-source-label { display: block; color: var(--ui-accent); font-size: 11px; margin-bottom: 2px; }
+.sw-source:focus-visible, .sw-row:focus-visible { outline: 2px solid var(--ui-accent); outline-offset: -2px; }
+.sw-rank { min-width: 14px; padding-top: 2px; font-size: 11px; color: var(--ui-muted); }
 .sw-main { flex: 1 1 auto; min-width: 0; }
-.sw-title {
-	overflow-wrap: anywhere; font-size: 13px; line-height: 1.35; color: var(--text-primary, currentColor);
-	display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
-}
-.sw-meta { font-size: 11px; color: var(--text-secondary, gray); line-height: 1.4; margin-top: 3px;
-	white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.sw-side { flex: none; width: 74px; display: flex; flex-direction: column;
-	align-items: flex-end; gap: 4px; padding-top: 1px; }
-.sw-num { font-size: 11px; font-weight: 500; color: var(--accent-blue, #3874d8);
-	font-variant-numeric: tabular-nums; }
-.sw-track { width: 74px; height: 4px; border-radius: 2px;
-	background: var(--fill-secondary, rgba(127, 127, 127, 0.25)); overflow: hidden; }
-.sw-bar { height: 100%; border-radius: 2px; background: var(--accent-blue, #3874d8); }
-.sw-tags { contain: inline-size; min-width: 0; margin: 4px 0 10px; padding: 8px; border-bottom: 1px solid var(--fill-secondary, rgba(128,128,128,.2)); }
-.sw-tag-new { color: light-dark(#7540a4, #cba2f0); }
-.sw-tag-existing { color: light-dark(#1762ad, #80b8ee); }
-.sw-tags[hidden] { display: none; }
+.sw-title { overflow-wrap: anywhere; font-size: 13px; font-weight: 600; line-height: 1.45; color: var(--ui-fg); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.sw-meta { font-size: 11px; color: var(--ui-muted); line-height: 1.5; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sw-side { flex: none; width: max-content; max-width: 74px; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; padding-top: 1px; }
+.sw-num { font-size: 11px; font-weight: 500; color: var(--ui-accent); font-variant-numeric: tabular-nums; }
+.sw-track { width: 52px; height: 4px; border-radius: 2px; background: var(--ui-border); overflow: hidden; }
+.sw-bar { height: 100%; border-radius: 2px; background: var(--ui-accent); }
+.sw-tags { contain: inline-size; min-width: 0; margin: 4px 0 8px; padding: 8px; border-bottom: 1px solid var(--ui-border); font: 12px/1.5 var(--ui-font); }
+.sw-tag-new { color: var(--ui-fg); }
+.sw-tag-existing { color: var(--ui-muted); }
 .sw-tag-heading { display: flex; gap: 8px; align-items: center; justify-content: space-between; margin-bottom: 6px; }
-.sw-tag-heading strong { font-size: 12px; }
-.sw-tag-organize { font: inherit; font-size: 11px; background: transparent; border: 0; color: var(--accent-blue, #3874d8); padding: 2px; cursor: pointer; }
-.sw-tag-option { display: flex; gap: 6px; align-items: flex-start; padding: 4px 0; font-size: 12px; }
+.sw-tag-heading strong { font-size: 12px; font-weight: 550; }
+.sw-tag-organize { font: inherit; font-size: 11px; background: transparent; border: 0; color: var(--ui-accent); padding: 2px; cursor: pointer; }
+.sw-tag-option { display: flex; gap: 6px; align-items: flex-start; padding: 4px 0; }
 .sw-tag-name { min-width: 0; flex: 1; overflow-wrap: anywhere; }
-.sw-tag-support { flex: none; font-size: 11px; color: var(--text-secondary, gray); }
+.sw-tag-support { flex: none; font-size: 11px; color: var(--ui-muted); }
 .sw-tag-apply { margin: 6px 0 0; font-size: 12px; }
-.sw-flag { font-size: 10px; color: var(--text-tertiary, gray); border: 1px solid
-	var(--fill-tertiary, rgba(127,127,127,.35)); border-radius: 3px; padding: 0 3px; }
+.sw-flag { font-size: 10px; color: var(--ui-muted); white-space: nowrap; }
 `;
 
 var SWSection = {
@@ -154,6 +138,7 @@ var SWSection = {
         id: "similar-works-preferences",
         src: rootURI + "content/preferences.xhtml",
         scripts: [rootURI + "content/preferences.js"],
+        stylesheets: [rootURI + "content/preferences.css"],
       })
         .then((id) => {
           if (this._stopped) Zotero.PreferencePanes.unregister(id);

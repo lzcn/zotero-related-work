@@ -416,7 +416,7 @@
     sortBy = "";
     setSort(duplicates.checked ? "group" : "name");
   });
-  mode.addEventListener("change", () => {
+  mode.addEventListener("command", () => {
     void selectionChanged().catch(report);
     void render().catch(report);
   });

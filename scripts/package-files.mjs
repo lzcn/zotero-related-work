@@ -1,4 +1,6 @@
 export const requiredFiles = [
+  "content/ui.css",
+  "content/preferences.css",
   "data/tag-terms.json",
   "icons/tag-manager.svg",
   "icons/icon-16.svg",

@@ -25,7 +25,7 @@ similar-works-pref-metadata =
 
 similar-works-pref-index-heading = 状态
 similar-works-pref-index = 文献整理
-similar-works-pref-error = 准备失败，请重启 Zotero 重试。
+similar-works-pref-error = 准备失败，请重启 Zotero。
 similar-works-pref-index-value = { $known ->
     [1] { $phase } · 已处理 { $count } / { $total } 篇
    *[0] { $phase } · 已处理 { $count } 篇
@@ -79,7 +79,7 @@ similar-works-pref-exclude-colored-tags =
     .label = 排除有颜色的标签
 similar-works-pref-excluded-tags =
     .value = 排除标签
-similar-works-pref-excluded-tags-help = 每行一个名称，含同名变体。
+similar-works-pref-excluded-tags-help = 每行一个，同名变体也排除。
 similar-works-tags-protected = 标签已被排除，请检查设置。
 
 similar-works-tags-select-all = 全选
@@ -89,14 +89,17 @@ similar-works-tags-selection-count = { $visible } / { $total } · 已选 { $sele
        *[other] · { $hidden } 项隐藏
     }
 similar-works-tags-action = 操作
-similar-works-tags-format = 重命名
-similar-works-tags-merge-action = 合并
+similar-works-tags-format =
+    .label = 重命名
+similar-works-tags-merge-action =
+    .label = 合并
 similar-works-tags-preparing = 正在准备预览…
 similar-works-tags-format-preview = 改名 { $count } · 条目 { $items } · 合并 { $merges }
 similar-works-tags-formatted = 已转换 { $count } 个标签的格式。
 similar-works-tags-no-matches = 没有匹配的标签。
 
-similar-works-tags-delete-action = 删除
+similar-works-tags-delete-action =
+    .label = 删除
 
 similar-works-tags-delete-button =
     .label = 删除
@@ -167,7 +170,8 @@ similar-works-tags-new = 新标签
 similar-works-tags-name-column = 名称
 similar-works-tags-count-column = 条目数
 similar-works-tags-group-column = 匹配
-similar-works-tags-format-action = 统一格式
+similar-works-tags-format-action =
+    .label = 统一格式
 similar-works-tags-match-name = 名称变体
 similar-works-tags-match-plural = 单复数
 similar-works-tags-match-abbreviation = 缩写
