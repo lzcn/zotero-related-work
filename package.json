@@ -24,6 +24,7 @@
     "typecheck": "tsc --noEmit",
     "build:force": "node scripts/build.mjs --force",
     "test:host": "node scripts/test-host.mjs",
+    "test:restart": "node scripts/test-restart.mjs",
     "test:native": "node scripts/build-native.mjs && node scripts/test-native.mjs"
   },
   "devDependencies": {

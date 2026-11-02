@@ -512,9 +512,17 @@ var SWSemantic = {
       const dense = await this.search(key, 100, filter, () => !active());
       if (!active()) return null;
       return {
-        matches: dense
-          ? SWSearch.fuse([lexical, dense], k)
-          : lexical.slice(0, k),
+        matches: SWSearch.fuse(
+          [
+            SWSearch.relevant(
+              lexical,
+              "text",
+              Number(SWPref("minimumSimilarity", 0.05)),
+            ),
+            ...(dense ? [SWSearch.relevant(dense, "semantic")] : []),
+          ],
+          k,
+        ),
         snapshot,
       };
     }, 1);
@@ -542,7 +550,7 @@ var SWSemantic = {
     );
   },
 
-  saveRecommendations(
+  async saveRecommendations(
     key,
     includeWeak,
     matches,
@@ -567,6 +575,22 @@ var SWSemantic = {
     });
     while (this._recommendations.size > 1000)
       this._recommendations.delete(this._recommendations.keys().next().value);
+    await this.corpus.runTask(async () => {
+      if (
+        this._stopped ||
+        !Object.entries(snapshot).every(
+          ([name, value]) => this.snapshot(key)[name] === value,
+        )
+      )
+        return;
+      await this.corpus.saveHybridRecommendations(
+        key,
+        includeWeak,
+        matches,
+        snapshot,
+        this.version,
+      );
+    });
   },
 
   forget(key) {

@@ -391,12 +391,18 @@ var SWSearch = (() => {
     const scores = new Map();
     // Fixed equal-weight RRF, validated on local paper-to-paper retrieval.
     const normalizer = rankings.length / 61;
-    for (const ranking of rankings) {
+    for (const [channel, ranking] of rankings.entries()) {
       const seen = new Set();
       ranking.slice(0, 100).forEach((match, rank) => {
         if (seen.has(match.key)) return;
         seen.add(match.key);
-        const result = scores.get(match.key) || { ...match, score: 0 };
+        const result = scores.get(match.key) || {
+          ...match,
+          score: 0,
+          lexicalScore: 0,
+          semanticScore: 0,
+        };
+        result[channel === 0 ? "lexicalScore" : "semanticScore"] = match.score;
         result.score += 1 / (61 + rank) / normalizer;
         scores.set(match.key, result);
       });
@@ -404,6 +410,26 @@ var SWSearch = (() => {
     return [...scores.values()]
       .sort((a, b) => b.score - a.score || a.key.localeCompare(b.key))
       .slice(0, k);
+  }
+
+  // Rank fusion orders results; raw channel scores decide whether they belong.
+  // Relative floors remove a weak tail without imposing an output count.
+  function relevant(matches, channel = "text", minimum = 0.05) {
+    if (!Number.isFinite(minimum) || minimum < 0 || minimum > 1) minimum = 0.05;
+    if (channel === "hybrid")
+      return matches.filter(
+        (m) =>
+          (m.lexicalScore || 0) >= minimum || (m.semanticScore || 0) >= 0.4,
+      );
+    const valid = matches.filter(
+      (m) => Number.isFinite(m.score) && m.score > 0,
+    );
+    const best = Math.max(0, ...valid.map((m) => m.score));
+    const floor =
+      channel === "semantic"
+        ? Math.max(0.4, best * 0.7)
+        : Math.max(minimum, best * 0.2);
+    return valid.filter((m) => m.score >= floor);
   }
   class Posting {
     constructor() {
@@ -787,6 +813,7 @@ var SWSearch = (() => {
     Heap,
     hash,
     clean,
+    features,
     extract,
     encodeCounts,
     decodeCounts,
@@ -799,6 +826,7 @@ var SWSearch = (() => {
     cosine,
     isDuplicate,
     fuse,
+    relevant,
     SIGNATURE_SIZE,
     CANDIDATES,
   };

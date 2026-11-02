@@ -31,6 +31,8 @@ var SWIndexer = {
   _libraryTotal: null,
   _statusLastWrite: 0,
   _statusWrite: Promise.resolve(),
+  _tagText: new Map(),
+  _tagTextPending: new Map(),
 
   getStatus() {
     const indexedItems = this.corpus?.n || 0;
@@ -209,7 +211,7 @@ var SWIndexer = {
     try {
       var live = new Set();
       var oldKeys = Array.from(this.corpus.docs.keys());
-      var scanned = 0;
+      var sliceStarted = Date.now();
       for (var lib of Zotero.Libraries.getAll()) {
         var ids = await Zotero.Items.getAll(lib.id, true, false, true);
         // Fetch items in pages through the host API instead of one call per row.
@@ -220,16 +222,23 @@ var SWIndexer = {
           );
           for (var item of page) {
             if (this._stopped) return;
-            if (++scanned % 25 === 0) await swYield(100);
+            if (Date.now() - sliceStarted >= 6) {
+              await swYield(0);
+              sliceStarted = Date.now();
+            }
             var target = await this.resolveDocItem(item);
             if (!target) continue;
-            live.add(this.docKey(target));
+            const key = this.docKey(target);
+            const seen = live.has(key);
+            live.add(key);
             this._itemKeys.set(item.id, {
               key: this.docKey(item),
               parentID: item.parentItemID,
             });
-            if (SWPref("backgroundIndexing", true)) this.enqueue(item.id);
+            if (!seen && SWPref("backgroundIndexing", true))
+              this.enqueue(target.id);
           }
+          await swYield(0);
         }
       }
       this._libraryTotal = live.size;
@@ -256,14 +265,17 @@ var SWIndexer = {
       while (!this._stopped && this._queue.length) {
         var id = this._queue.shift();
         this._queued.delete(id);
-        var remaining = Math.max(2000, SWPref("indexDelayMs", 2000));
+        const changed = await this._processId(id);
+        this._reportStatus();
+        // Pace expensive updates, not the cheap source checks on every restart.
+        var remaining = changed
+          ? Math.max(2000, SWPref("indexDelayMs", 2000))
+          : 0;
         while (!this._stopped && remaining > 0) {
           await swYield(Math.min(100, remaining));
           remaining -= 100;
         }
         if (this._stopped) break;
-        await this._processId(id);
-        this._reportStatus();
       }
     } finally {
       this._draining = false;
@@ -275,7 +287,7 @@ var SWIndexer = {
     try {
       var item = await Zotero.Items.getAsync(id);
       if (item) {
-        await this.processItem(item);
+        return await this.processItem(item);
       }
     } catch (e) {
       Zotero.logError(e);
@@ -342,7 +354,7 @@ var SWIndexer = {
     );
     this._inFlight.set(target.id, work);
     try {
-      await work;
+      return await work;
     } finally {
       this._inFlight.delete(target.id);
     }
@@ -357,13 +369,11 @@ var SWIndexer = {
     }
     var key = this.docKey(item);
     if (item.deleted) {
-      await this.corpus._removeDoc(key);
-      return;
+      return await this.corpus._removeDoc(key);
     }
     var info = await this.extractText(item);
     if (!info) {
-      await this.corpus._removeDoc(key);
-      return;
+      return await this.corpus._removeDoc(key);
     }
     if (this._stopped) return;
     if (item.deleted) {
@@ -397,6 +407,7 @@ var SWIndexer = {
     var weak = info.weak || tf.size < SWPref("minFulltextTerms", 25);
     await this.corpus._upsertDoc(key, info.hash, weak, tf);
     if (typeof SWSemantic !== "undefined") SWSemantic.enqueue(key);
+    return true;
   },
 
   async termFreqInBackground(text) {
@@ -459,6 +470,48 @@ var SWIndexer = {
     return null;
   },
 
+  // Read only the selected paper's existing Zotero cache, never index or OCR
+  // on demand. Reuse the bounded sample until its indexed source changes.
+  async tagText(item, active = () => true) {
+    if (this._stopped || !active()) return "";
+    const key = this.docKey(item);
+    const source = this.corpus?.docs.get(key)?.hash;
+    const version = JSON.stringify([
+      source,
+      item.getField("title"),
+      item.getField("abstractNote"),
+    ]);
+    const cached = this._tagText.get(key);
+    if (cached?.version === version) return cached.text;
+    const pendingKey = key + version;
+    let work = this._tagTextPending.get(pendingKey);
+    if (!work) {
+      work = this.extractText(item, true)
+        .then((info) => {
+          const text = info && !info.weak ? info.content : "";
+          if (
+            !this._stopped &&
+            this.corpus?.docs.get(key)?.hash === source &&
+            active()
+          ) {
+            this._tagText.delete(key);
+            this._tagText.set(key, { version, text });
+            while (this._tagText.size > 16)
+              this._tagText.delete(this._tagText.keys().next().value);
+          }
+          return text;
+        })
+        .finally(() => this._tagTextPending.delete(pendingKey));
+      this._tagTextPending.set(pendingKey, work);
+    }
+    const text = await work;
+    return !this._stopped &&
+      active() &&
+      this.corpus?.docs.get(key)?.hash === source
+      ? text
+      : "";
+  },
+
   async attachmentText(att, readCached = false) {
     try {
       if (att.deleted) return null;
@@ -476,6 +529,7 @@ var SWIndexer = {
       var have = await IOUtils.exists(path);
       if (
         !have &&
+        !readCached &&
         SWPref("requestMissingFulltext", false) &&
         !this._requestedFulltext.has(att.id) &&
         (await att.fileExists())
@@ -562,6 +616,7 @@ var SWIndexer = {
     }
     this._queue = [];
     this._queued.clear();
+    this._tagText.clear();
     this._reportStatus(true);
   },
 
@@ -571,6 +626,7 @@ var SWIndexer = {
     await this._scanPromise;
     await this._drainPromise;
     await Promise.allSettled(Array.from(this._inFlight.values()));
+    await Promise.allSettled(Array.from(this._tagTextPending.values()));
     await this._statusWrite;
   },
 };

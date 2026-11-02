@@ -33,6 +33,7 @@ function fixture() {
     progress: { phase: "ready" },
     ready: Promise.resolve(),
     runTask: async (work) => work(),
+    saveHybridRecommendations: async () => {},
     _db: {
       execute: async (...args) => {
         writes.push(args);
@@ -306,7 +307,10 @@ test("hybrid retrieval fuses ranks, falls back before embeddings and rejects sta
   assert.equal(result.matches.length, 3);
   semantic.vectors.delete("1/Q");
   result = await semantic.recommend("1/Q", 10);
-  assert.deepEqual(result.matches, lexical);
+  assert.deepEqual(
+    result.matches.map((m) => [m.key, m.lexicalScore]),
+    lexical.map((m) => [m.key, m.score]),
+  );
   semantic.corpus.search.search = async () => {
     semantic.corpus.revision++;
     return lexical;

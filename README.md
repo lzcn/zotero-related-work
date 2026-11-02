@@ -12,8 +12,10 @@ Requires Zotero 10. Download the XPI from [Releases](https://github.com/lzcn/zot
 
 ## Use
 
+<!-- - Expand **Match evidence** under a result to compare shared terms and verbatim passages from both papers. Evidence uses titles, abstracts and existing cached text. -->
+
 - Select a paper and open **Related Work** in the sidebar. Click a result to navigate; **From** returns to the previous paper.
-- Select **Suggested tags**, then click **Add selected**.
+- Review **Suggested tags**, with new tags first, then click **Add selected**. Topics need evidence in the current paper; the list stops when further suggestions add little value.
 - Open **Tools → Tag Manager** to merge, rename, format or remove tags. Review changes before applying.
 
 Settings control tag naming and protected tags. Recommendations combine text matching with local semantic matching on macOS. First use downloads about 90 MB of model weights, tokenizer files and a roughly 52 MiB macOS runtime archive; text results remain available during preparation and on other platforms. Semantic matching mainly supports English papers. The similarity graph is currently unavailable.
@@ -23,6 +25,25 @@ The interface uses a fixed Bear-inspired palette with compact recommendation lis
 ## Data
 
 Rebuildable caches live under `related-work/` in the Zotero data directory. The plugin leaves Zotero's original full-text database unchanged. Tag operations update native Zotero tags.
+
+## Relevance and display
+
+When a saved recommendation list is available, it appears before the full search index and document vectors finish loading. Background checks and reranking then update it; usable cached rows remain visible if loading fails.
+
+The result count controls the initial batch, not a quota. Raw text and semantic scores filter weak matches before rank fusion; scrolling loads more qualifying papers (up to 100 retrieval candidates). A short list is never padded to the configured count.
+
+Tags use the title, abstract and at most 24 KB of the selected paper's existing Zotero full-text cache. The sample is reused until the indexed source changes; missing text does not trigger OCR or a library scan. Repeated, distributed full-text phrases can introduce new topics; references and isolated mentions cannot. Existing indexed term counts verify body evidence. Neighbor support and MiniLM rerank supported topics, then relevance and phrase overlap determine where to stop. New and existing tags follow the same selection rule, without reserved slots. Tag inputs are independent of the displayed result count.
+
+```mermaid
+flowchart LR
+  index["Existing text index + MiniLM vectors"] --> evidence["Raw relevance filter"]
+  evidence --> ranks["Fuse qualifying ranks"]
+  ranks --> pages["Initial batch → more on scroll"]
+  ranks --> neighbors["Bounded topic context"]
+  paper["Current paper: title, abstract, cached text"] --> topics["Supported topics"]
+  neighbors --> topics
+  topics --> tags["Relevance + redundancy → suggested tags"]
+```
 
 ## Recommendation architecture
 
@@ -59,7 +80,7 @@ Assets are separated by where they belong:
 | Operating system  | Available system inference frameworks, such as Core ML on macOS        |
 | Local build cache | Backend-specific compiled model caches and document vector indexes     |
 
-The plugin manages setup automatically. Local preparation means initializing the backend and compiling model caches where needed, then building document vectors. Users do not need Node.js, Python, Xcode or a manual compilation step. Valid downloaded files and unchanged document vectors are reused across restarts and plugin updates; assets are downloaded again when missing, damaged or changed by a required version update.
+The plugin manages setup automatically. Local preparation means initializing the backend and compiling model caches where needed, then building document vectors. Users do not need Node.js, Python, Xcode or a manual compilation step. Startup checks each paper once, reuses persisted source checks and only paces actual content updates. Valid downloaded files and unchanged document vectors are reused across restarts and plugin updates; assets are downloaded again when missing, damaged or changed by a required version update.
 
 **Current implementation:** macOS uses native ONNX Runtime with Core ML acceleration and a CPU fallback; the JS Worker handles tokenization. Windows and Linux currently provide text recommendations. On macOS, semantic indexing starts automatically after a startup delay or when recommendations are opened, and missing model files are downloaded when inference first initializes. Model weights and the macOS ONNX Runtime library are downloaded separately with pinned SHA-256 checks; the XPI contains only the small native helper and runtime download metadata. Valid runtime caches are reused, missing or damaged libraries are downloaded again, and temporary downloads are removed after preparation or cancellation. The portable JS/WASM inference path and direct Core ML backend remain to be implemented. Windows and Linux acceleration backends are future work.
 

@@ -13,6 +13,63 @@ const { SWCorpus } = require("../src/corpus.js");
 const noPause = async () => {};
 const noCancel = () => false;
 
+test("match evidence contains actual passages on both sides without inventing an explanation", () => {
+  const { SWEvidence } = require("../src/retrieval-evidence.js");
+  const left = [
+    {
+      field: "abstract",
+      text: "Temporal neighborhoods retain graph context. A separate experiment tests noise.",
+    },
+  ];
+  const right = [
+    { field: "title", text: "Ocean surveys" },
+    {
+      field: "abstract",
+      text: "We study graph context with temporal neighborhoods. Performance depends on edge history.",
+    },
+  ];
+  const result = SWEvidence.compare(left, right);
+  assert.ok(result.terms.length);
+  assert.ok(left.some((field) => field.text.includes(result.current.text)));
+  assert.ok(right.some((field) => field.text.includes(result.match.text)));
+  assert.equal(result.match.field, "abstract");
+  assert.deepEqual(
+    SWEvidence.compare(left, [{ field: "title", text: "Marine species" }])
+      .terms,
+    [],
+  );
+});
+
+test("item evidence reads cached text on demand and drops cancelled work", async () => {
+  const { SWEvidence } = require("../src/retrieval-evidence.js");
+  const previous = global.SWIndexer;
+  let reads = 0;
+  let active = true;
+  const item = { getField: () => "Temporal graph context" };
+  global.SWIndexer = {
+    resolveDocItem: async (value) => value,
+    tagText: async () => {
+      reads++;
+      return "Temporal graph neighborhoods retain context.";
+    },
+  };
+  try {
+    const result = await SWEvidence.compareItems(item, item);
+    assert.ok(result.current.text && result.match.text);
+    assert.equal(reads, 2);
+    assert.equal(await SWEvidence.compareItems(item, item, () => false), null);
+    assert.equal(reads, 2);
+    global.SWIndexer.tagText = async () => {
+      active = false;
+      return "Temporal graph context";
+    };
+    assert.equal(await SWEvidence.compareItems(item, item, () => active), null);
+  } finally {
+    if (previous === undefined) delete global.SWIndexer;
+    else global.SWIndexer = previous;
+  }
+});
+
 test("schema initialization uses LIKE bindings accepted by Gecko", async () => {
   const corpus = new SWCorpus();
   corpus._db = {
@@ -43,8 +100,8 @@ test("RRF uses fixed ranks rather than incompatible score scales", () => {
     SWSearch.fuse([
       lexical.map((m) => ({ ...m, score: m.score / 1e6 })),
       dense,
-    ]),
-    result,
+    ]).map(({ key, score }) => ({ key, score })),
+    result.map(({ key, score }) => ({ key, score })),
   );
   assert.deepEqual(SWSearch.fuse([]), []);
   assert.equal(SWSearch.fuse([lexical, dense], 1).length, 1);
@@ -541,4 +598,71 @@ test("an unsupported index schema closes the database and shutdown blocker", asy
     global.IOUtils = saved.IOUtils;
     global.ChromeUtils = saved.ChromeUtils;
   }
+});
+
+test("raw evidence rejects weak rankings and retains every strong match beyond a display batch", () => {
+  const strong = Array.from({ length: 40 }, (_, i) => ({
+    key: "1/S" + i,
+    score: 0.8 - i * 0.004,
+  }));
+  const lexical = [...strong, { key: "1/TAIL", score: 0.07 }];
+  assert.equal(SWSearch.relevant(lexical).length, 40);
+  const weak = [{ key: "1/W", score: 0.01 }];
+  assert.equal(SWSearch.relevant(weak).length, 0);
+  assert.equal(SWSearch.relevant(weak, "semantic").length, 0);
+  const fused = SWSearch.fuse([weak, weak]);
+  assert.equal(fused[0].score, 1, "Rank alone cannot establish relevance");
+  assert.equal(SWSearch.relevant(fused, "hybrid").length, 0);
+  const accepted = SWSearch.fuse(
+    [
+      SWSearch.relevant(lexical),
+      SWSearch.relevant([{ key: "1/D", score: 0.75 }], "semantic"),
+    ],
+    100,
+  );
+  assert.equal(accepted.length, 41);
+  assert.equal(accepted.find((m) => m.key === "1/D").semanticScore, 0.75);
+  assert.equal(accepted.find((m) => m.key === "1/S0").lexicalScore, 0.8);
+});
+
+test("startup restores source checks so an unchanged document needs no repeat write", async () => {
+  const corpus = new SWCorpus();
+  corpus.search.epoch = 1;
+  const counts = SWSearch.encodeCounts(new Map([[123, 4]]));
+  const signature = SWSearch.encodeSignature([[123, 1]]);
+  let page = 0;
+  const writes = [];
+  corpus._db = {
+    async execute(sql, params) {
+      if (sql.startsWith("SELECT COUNT")) return [{ getResultByName: () => 1 }];
+      if (sql.startsWith("SELECT d.key"))
+        return page++
+          ? []
+          : [
+              {
+                getResultByName: (name) =>
+                  ({
+                    key: "1/A",
+                    hash: "source-v1",
+                    weak: 1,
+                    counts,
+                    signature,
+                    epoch: 1,
+                    simhash: null,
+                    itemModifiedAt: "2026-11-02 04:00:00",
+                    sourceHash: "source-v1",
+                  })[name],
+              },
+            ];
+      writes.push([sql, params]);
+      return [];
+    },
+  };
+  corpus._maintainEpoch = async () => {};
+  await corpus._loadAll();
+  await corpus.recordSource("1/A", "2026-11-02 04:00:00", "source-v1");
+  assert.equal(writes.length, 0);
+  await corpus.recordSource("1/A", "2026-11-02 05:00:00", "source-v2");
+  assert.equal(writes.length, 1);
+  assert.ok(writes[0][0].includes("source_updates"));
 });

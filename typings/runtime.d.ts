@@ -1,4 +1,5 @@
 declare const SWSearch: typeof import("../src/search").SWSearch;
+declare const SWEvidence: typeof import("../src/retrieval-evidence").SWEvidence;
 declare const SWPlugin: { id: string; version: string; rootURI: string };
 declare const module: { exports: unknown };
 declare const SWCorpus: typeof import("../src/corpus").SWCorpus;
@@ -25,3 +26,6 @@ declare const SWTags: typeof import("../src/tags").SWTags;
 declare const SWGraph: typeof import("../src/graph").SWGraph;
 
 declare const SWSemantic: typeof import("../src/semantic").SWSemantic;
+
+declare const swTagKey: typeof import("../src/tags").swTagKey;
+declare const swTagAliasKey: typeof import("../src/tags").swTagAliasKey;

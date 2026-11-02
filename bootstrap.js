@@ -78,6 +78,8 @@ async function start({ id, version, rootURI }, token) {
       "indexer.js",
       "semantic.js",
       "tags.js",
+      "tag-suggestions.js",
+      "retrieval-evidence.js",
       "graph.js",
       "section.js",
     ];

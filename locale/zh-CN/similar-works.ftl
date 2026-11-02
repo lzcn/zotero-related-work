@@ -19,7 +19,7 @@ similar-works-progress =
     .aria-label = 相似度计算进度
 
 similar-works-pref-limit =
-    .value = 最多显示条数
+    .value = 首批显示数量
 similar-works-pref-metadata =
     .label = 包含没有全文的文献
 
@@ -182,3 +182,10 @@ similar-works-tags-format-button =
     .label = 统一格式
 
 similar-works-tags-match-alias = 术语别名
+
+similar-works-more = 更多
+similar-works-evidence = 匹配依据
+similar-works-evidence-current = 当前论文
+similar-works-evidence-match = 匹配论文
+similar-works-evidence-empty = 尚未在可用文本中定位到共同表述。
+similar-works-evidence-failed = 依据未能加载，请重试。

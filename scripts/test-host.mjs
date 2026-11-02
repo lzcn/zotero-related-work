@@ -13,6 +13,7 @@ import { join } from "node:path";
 import { zipSync, unzipSync, strFromU8, strToU8 } from "fflate";
 import process from "node:process";
 import { URL } from "node:url";
+import { Script } from "node:vm";
 import { setTimeout, clearTimeout } from "node:timers";
 
 const root = await mkdtemp(join(tmpdir(), "similar-works-host-"));
@@ -141,6 +142,7 @@ startup = async function(data) {
         await IOUtils.write(PathUtils.join(folder,name+'.png'),new Uint8Array(await blob.arrayBuffer()));
       };
       if (doc.querySelectorAll("#similar-works-style").length !== 1) throw new Error("Duplicate stylesheet");
+      if (Zotero.RelatedWork) throw new Error("A cross-plugin query API was registered");
       const item = new Zotero.Item("journalArticle");
       item.libraryID = Zotero.Libraries.userLibraryID;
       item.setField("title", "Deep Learning: " + "A long source title with several words ".repeat(6));
@@ -200,7 +202,7 @@ startup = async function(data) {
       for (const name of ["Deep Learning", "deep-learning"]) {
         const peer = new Zotero.Item("journalArticle");
         peer.libraryID = item.libraryID;
-        peer.setField("title", "Tagged similar paper");
+        peer.setField("title", "Deep Learning for representation learning");
         peer.addTag(name, name === "deep-learning" ? 1 : 0);
         peer.addTag("Unrelated neighbor topic");
         await peer.saveTx({skipSelect:true});
@@ -218,8 +220,7 @@ startup = async function(data) {
       tagBody._swToken = 1;
       const tagProps = {body:tagBody,item,tabType:"library"};
       await SWScope.SWSection.presentTags(tagProps, peers.map((peer, index) => ({item:peer,score:0.9-index*0.1})), SWScope.SWIndexer.docKey(item), 1);
-      if (![...tagBody.querySelectorAll('.sw-tag-option input')].some(input => input.value === "Unrelated neighbor topic")) throw new Error("Neighbor-only suggestion missing");
-      if (tagBody.querySelectorAll('.sw-tag-option input').length > 12) throw new Error("Too many suggested tags");
+      if ([...tagBody.querySelectorAll('.sw-tag-option input')].some(input => input.value === "Unrelated neighbor topic")) throw new Error("Unsupported neighbor topic leaked into suggestions");
       const recommended = [...tagBody.querySelectorAll('.sw-tag-option input')].find(input => input.value === "Deep Learning");
       if (!recommended || recommended.value !== "Deep Learning" || recommended.checked) throw new Error("Tag recommendations were not opt-in");
       recommended.checked = true;
@@ -365,6 +366,80 @@ startup = async function(data) {
       tagBody.querySelector('.sw-tag-apply').click();
       await waitFor(() => topic.hasTag(newName), "apply supported new tag");
       if (topic.getTags().find(tag => tag.tag === newName).type) throw new Error("New tag is not manual");
+      tagBody.hidden = true;
+
+      const diffusionPaper = new Zotero.Item("journalArticle");
+      diffusionPaper.libraryID = item.libraryID;
+      diffusionPaper.setField("title", "Unsupervised diffusion solver for combinatorial optimization via combinatorial adjoint matching");
+      diffusionPaper.setField("abstractNote", "We train discrete diffusion models for combinatorial optimization without labelled solutions. Combinatorial adjoint matching propagates optimization signals along trajectories of continuous-time Markov chains.");
+      await diffusionPaper.saveTx({skipSelect:true});
+      const diffusionNeighbor = new Zotero.Item("journalArticle");
+      diffusionNeighbor.libraryID = item.libraryID;
+      diffusionNeighbor.setField("title", "Diffusion models for image synthesis and personalized marketing");
+      diffusionNeighbor.setField("abstractNote", "Discrete diffusion models also support combinatorial optimization through Markov chains.");
+      const unsupportedTopics = ["#Image Synthesis", "#Personalized Marketing", "#Recommender Systems Systems", "#Stable Diffusion", "#Denoising Diffusion Probabilistic Models", "#Constraint Satisfaction", "#Probabilistic Reasoning"];
+      for (const name of ["#Optimization", "#Combinatorial Optimization", "#Diffusion Model", "#Continuous-Time Markov Chains", ...unsupportedTopics]) diffusionNeighbor.addTag(name);
+      await diffusionNeighbor.saveTx({skipSelect:true});
+      await SWScope.SWIndexer.ensureNow(diffusionNeighbor);
+      const fulltextAttachment = new Zotero.Item("attachment");
+      fulltextAttachment.libraryID = item.libraryID;
+      fulltextAttachment.parentItemID = diffusionPaper.id;
+      fulltextAttachment.attachmentLinkMode = Zotero.Attachments.LINK_MODE_IMPORTED_FILE;
+      fulltextAttachment.attachmentContentType = "application/pdf";
+      fulltextAttachment.attachmentPath = "storage:paper.pdf";
+      fulltextAttachment.setField("title", "Cached full text fixture");
+      await fulltextAttachment.saveTx({skipSelect:true});
+      const textPath = Zotero.Fulltext.getItemCacheFile(fulltextAttachment).path;
+      await IOUtils.makeDirectory(PathUtils.parent(textPath), {ignoreExisting:true});
+      await IOUtils.writeUTF8(textPath,
+        "Stochastic control describes the optimization of discrete trajectories.\\n" +
+        "We connect stochastic control with unsupervised combinatorial optimization.\\n" +
+        "The stochastic control objective guides the diffusion solver.\\n" +
+        "References\\nPersonalized marketing. Personalized marketing. Personalized marketing.");
+      await SWScope.SWIndexer.ensureNow(diffusionPaper);
+      await Zotero.getActiveZoteroPane().selectItem(diffusionPaper.id);
+      const liveTagBody = section.querySelector('[data-type="body"]');
+      const diffusionProps = {body:liveTagBody,item:diffusionPaper,tabType:"library"};
+      await SWScope.SWSection.renderBody(diffusionProps,true);
+      await waitFor(()=>liveTagBody.querySelector('.sw-tag-new') && !liveTagBody.querySelector('.sw-tags').hidden,"render supported diffusion topics");
+      const tagNames = [...liveTagBody.querySelectorAll('.sw-tag-name')];
+      if (tagNames.length >= 6) throw new Error("Peripheral topics still crowd the diffusion suggestions");
+      if (!tagNames.length || tagNames.some(tag=>unsupportedTopics.includes(tag.textContent))) throw new Error("Diffusion method leaked unrelated application tags");
+      if (!tagNames.some(tag=>tag.classList.contains('sw-tag-new')) || !tagNames.some(tag=>tag.classList.contains('sw-tag-existing'))) throw new Error("Missing title-based new tags beside existing suggestions");
+      if (!tagNames.some(tag=>tag.textContent.toLowerCase()==="stochastic control")) throw new Error("Missing repeated full-text topic");
+      let seenExisting = false;
+      const foreground = doc.defaultView.getComputedStyle(liveTagBody.querySelector('.sw-tags')).color;
+      for (const tag of tagNames) {
+        if (tag.classList.contains('sw-tag-existing')) seenExisting = true;
+        else if (seenExisting) throw new Error("New tag appears below existing tags");
+        if (doc.defaultView.getComputedStyle(tag).color!==foreground) throw new Error("Suggested tag text is faded");
+      }
+      doc.defaultView.resizeTo(1100,800);
+      section.querySelector('collapsible-section').open=true;
+      await section.closest('item-details').scrollToPane(SWScope.SWSection._registered,"instant");
+      await capture('suggested-tags',doc.defaultView);
+      result.tagSuggestions = tagNames.map(tag=>({name:tag.textContent,isNew:tag.classList.contains('sw-tag-new')}));
+      const pageMatches = [];
+      for (let i=0; i<40; i++) {
+        const paper = new Zotero.Item("journalArticle");
+        paper.libraryID = item.libraryID;
+        paper.setField("title", "Combinatorial optimization with discrete solvers " + i);
+        await paper.saveTx({skipSelect:true});
+        pageMatches.push({key:SWScope.SWIndexer.docKey(paper),score:0.8,weak:true});
+      }
+      const initialCount = Zotero.Prefs.get("similar-works.maxRecommendations");
+      Zotero.Prefs.set("similar-works.maxRecommendations",20);
+      pageMatches.push({key:"1/WEAKTAIL",score:0.01,weak:true});
+      const pageToken = liveTagBody._swToken;
+      liveTagBody._swMethod="text";
+      await SWScope.SWSection._presentMatches(diffusionProps,pageMatches,SWScope.SWIndexer.docKey(diffusionPaper),pageToken);
+      if (liveTagBody.querySelectorAll('.sw-row').length!==20) throw new Error("Initial batch did not respect display setting");
+      liveTagBody.querySelector('.sw-more').scrollIntoView({block:"end"});
+      await waitFor(()=>liveTagBody.querySelectorAll('.sw-row').length===40,"load relevant results on scroll");
+      if (liveTagBody.querySelector('.sw-more')) throw new Error("Weak tail was retained to fill results");
+      result.adaptiveResults=liveTagBody.querySelectorAll('.sw-row').length;
+      Zotero.Prefs.set("similar-works.maxRecommendations",initialCount);
+      await Zotero.getActiveZoteroPane().selectItem(item.id);
       peers[0].addTag("odd   tag");
       await peers[0].saveTx({skipSelect:true});
       td.getElementById('duplicates').checked = false;
@@ -572,6 +647,9 @@ startup = async function(data) {
         const encoded = await semantic._encode(["Spectral hashing for similarity search."]);
         if (encoded.vectors.length !== 1 || encoded.vectors[0].length !== 384)
           throw new Error("Native host inference returned invalid vector");
+        item.setField("title", "Deep Learning for molecular representation and molecule prediction");
+        item.setField("abstractNote", "Graph neural networks learn molecular representations for molecule prediction.");
+        await item.saveTx({skipSelect:true});
         const queryKey = SWScope.SWIndexer.docKey(item);
         for (const paper of [item, ...peers]) {
           await SWScope.SWIndexer.ensureNow(paper);
@@ -579,7 +657,10 @@ startup = async function(data) {
         }
         const hybrid = await semantic.recommend(queryKey, 10, key => key.startsWith(item.libraryID + "/"));
         if (!hybrid?.matches.some(match=>match.key===SWScope.SWIndexer.docKey(peers[0]))) throw new Error("Hybrid retrieval did not return indexed peers");
-        semantic.saveRecommendations(queryKey, true, hybrid.matches, hybrid.snapshot);
+        await semantic._build(SWScope.SWIndexer.docKey(diffusionPaper));
+        const semanticTags = await SWScope.SWTags.suggest(diffusionPaper,[{item:diffusionNeighbor,score:0.8}]);
+        if (semanticTags.some(tag=>unsupportedTopics.includes(tag.name)) || !semanticTags.some(tag=>tag.isNew)) throw new Error("Native MiniLM tag ranking lost topic evidence");
+        await semantic.saveRecommendations(queryKey, true, hybrid.matches, hybrid.snapshot);
         if (!semantic.recommendationsFresh(semantic.getRecommendations(queryKey,true),queryKey)) throw new Error("Hybrid host cache is stale immediately after retrieval");
         const hybridBody = doc.createElementNS("http://www.w3.org/1999/xhtml","div");
         doc.documentElement.appendChild(hybridBody);
@@ -649,11 +730,43 @@ startup = async function(data) {
       } finally { semantic._build = originalBuild; }
 
       await Zotero.getActiveZoteroPane().selectItem(item.id);
+      await new Promise(resolve => setTimeout(resolve, 300));
       const navigationBody = section.querySelector('[data-type="body"]');
       const sectionAPI = SWScope.SWSection;
       await sectionAPI._presentMatches(
         {body:navigationBody, item, tabType:"library"},
-        [{key:SWScope.SWIndexer.docKey(peers[0]), score:0.9, weak:true}],
+        [{key:SWScope.SWIndexer.docKey(peers[0]), score:0.9, lexicalScore:0.9, semanticScore:0, weak:true}],
+        SWScope.SWIndexer.docKey(item), navigationBody._swToken
+      );
+      const matchEvidence = navigationBody.querySelector('.sw-evidence');
+      if (!matchEvidence.hidden || doc.defaultView.getComputedStyle(matchEvidence).display !== 'none') throw new Error('Match evidence is visible by default');
+      matchEvidence.hidden = false;
+      matchEvidence.open = true;
+      try {
+        await waitFor(() => matchEvidence.querySelectorAll('blockquote').length === 2, 'show both recommendation passages');
+      } catch (error) {
+        throw new Error(error.message + JSON.stringify({connected:matchEvidence.isConnected,html:matchEvidence.innerHTML,direct:await SWScope.SWEvidence.compareItems(item,peers[0])}));
+      }
+      section.querySelector('collapsible-section').open = true;
+      await section.closest('item-details').scrollToPane(sectionAPI._registered, 'instant');
+      await new Promise(resolve => setTimeout(resolve, 100));
+      await sectionAPI._presentMatches(
+        {body:navigationBody, item, tabType:"library"},
+        [{key:SWScope.SWIndexer.docKey(peers[0]), score:0.9, lexicalScore:0.9, semanticScore:0, weak:true}],
+        SWScope.SWIndexer.docKey(item), navigationBody._swToken
+      );
+      const visibleEvidence = navigationBody.querySelector('.sw-evidence');
+      visibleEvidence.hidden = false;
+      visibleEvidence.open = true;
+      await waitFor(() => visibleEvidence.querySelectorAll('blockquote').length === 2, 'render visible evidence');
+      const evidenceRow = visibleEvidence.previousElementSibling;
+      if (evidenceRow.querySelector('.sw-title').getBoundingClientRect().bottom > evidenceRow.getBoundingClientRect().bottom) throw new Error('Wrapped title overflows its recommendation button');
+      visibleEvidence.hidden = true;
+      await capture('evidence-hidden',doc.defaultView);
+      result.matchEvidence = true;
+      await sectionAPI._presentMatches(
+        {body:navigationBody, item, tabType:"library"},
+        [{key:SWScope.SWIndexer.docKey(peers[0]), score:0.9, lexicalScore:0.9, semanticScore:0, weak:true}],
         SWScope.SWIndexer.docKey(item), navigationBody._swToken
       );
       navigationBody.querySelector(".sw-row").click();
@@ -707,6 +820,7 @@ startup = async function(data) {
 };
 `,
 );
+new Script(strFromU8(files["bootstrap.js"]), { filename: "host-bootstrap.js" });
 await writeFile(
   join(profile, "extensions/similar-works@lzcn.xpi"),
   zipSync(files),

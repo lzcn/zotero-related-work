@@ -29,7 +29,9 @@ class Element {
     this.append(...nodes);
   }
   remove() {
-    this.parent.children = this.parent.children.filter((n) => n !== this);
+    if (this.parent)
+      this.parent.children = this.parent.children.filter((n) => n !== this);
+    this.parent = null;
   }
   setAttribute(k, v) {
     this[k] = v;
@@ -152,6 +154,7 @@ function harness() {
     "corpus",
     "indexer",
     "tags",
+    "tag-suggestions",
     "section",
   ]) {
     vm.runInContext(
@@ -161,6 +164,7 @@ function harness() {
   }
   const corpus = vm.runInContext("new SWCorpus()", context);
   corpus._ready = Promise.resolve();
+  corpus._resolveOpened();
   corpus.progress.phase = "ready";
   corpus.search.epoch = 1;
   context.SWIndexer.corpus = corpus;
@@ -296,7 +300,7 @@ test("sidebar ranks top K in same library, preserves rows during indexing, and n
   assert.equal(h.errors.length, 0);
 });
 
-test("default recommendations are bounded, hide counts, and never pad weak results", async () => {
+test("the initial batch hides counts and never pads weak results", async () => {
   const h = harness();
   const query = h.item(1, "machine learning");
   for (let i = 1; i <= 31; i++)
@@ -314,14 +318,11 @@ test("default recommendations are bounded, hide counts, and never pad weak resul
   await h.SWSection.renderBody(props, true);
   assert.equal(h.body.querySelectorAll(".sw-row").length, 20);
   assert.equal(summary, "");
-  const rows = await h.SWSection._resolveRows(
-    [
-      { key: "1/KEY2", score: 0.05, weak: true },
-      { key: "1/KEY3", score: 0.049, weak: true },
-      { key: "1/KEY4", score: NaN, weak: true },
-    ],
-    20,
-  );
+  const rows = await h.SWSection._resolveRows([
+    { key: "1/KEY2", score: 0.05, weak: true },
+    { key: "1/KEY3", score: 0.049, weak: true },
+    { key: "1/KEY4", score: NaN, weak: true },
+  ]);
   assert.equal(
     rows.length,
     1,
@@ -886,14 +887,19 @@ test("sparse candidate pruning preserves cosine scores and tracks replaced terms
   );
 });
 
-test("opening the section never reads full text on the foreground path", async () => {
+test("opening the section permits bounded cache reading without foreground indexing", async () => {
   const h = harness(),
     q = h.item(1, "machine learning"),
     a = h.item(2, "machine learning");
   h.prefs.set("similar-works.backgroundIndexing", false);
   await h.SWIndexer.processItem(a);
-  h.SWIndexer.extractText = () => {
-    throw new Error("Foreground full-text indexing is forbidden");
+  h.SWIndexer.extractText = async (_item, bounded) => {
+    assert.equal(
+      bounded,
+      true,
+      "Only a bounded existing cache sample is permitted",
+    );
+    return null;
   };
   await h.SWSection.renderBody({ body: h.body, item: q });
   assert.equal(h.corpus.docs.get("1/KEY1").weak, true);
@@ -995,10 +1001,9 @@ test("Zotero integer preference loading does not truncate the similarity thresho
     h.context,
   );
   await h.SWIndexer.processItem(h.item(2, "hashing"));
-  const rows = await h.SWSection._resolveRows(
-    [{ key: "1/KEY2", score: 0.004, weak: true }],
-    20,
-  );
+  const rows = await h.SWSection._resolveRows([
+    { key: "1/KEY2", score: 0.004, weak: true },
+  ]);
   assert.equal(rows.length, 0);
 });
 
@@ -1023,10 +1028,18 @@ test("hybrid is an internal default and ignores obsolete algorithm preferences",
     recommendationsFresh: () => false,
     saveRecommendations() {},
     recommend: async () => ({
-      matches: [{ key: "1/KEY2", score: 0.7, weak: false }],
+      matches: [
+        {
+          key: "1/KEY2",
+          score: 0.7,
+          lexicalScore: 0.2,
+          semanticScore: 0.7,
+          weak: false,
+        },
+      ],
     }),
   };
-  // Old cosine/text thresholds must not remove fused ranks.
+  // Semantic evidence can admit a result independently of the lexical threshold.
   h.prefs.set("similar-works.minimumSimilarity", "0.8");
   h.prefs.set("similar-works.recommendationMethod", "semantic");
   await h.SWSection.renderBody({ body: h.body, item }, true);
@@ -1099,4 +1112,438 @@ test("recommendation navigation follows each hop and clears on manual selection"
   assert.equal(source.hidden, true);
   assert.deepEqual(h.selected, [2, 1]);
   assert.deepEqual(h.errors, []);
+});
+
+test("qualified results load beyond the initial batch and stale observers cannot append", async () => {
+  const h = harness();
+  const observers = [];
+  h.doc.defaultView.IntersectionObserver = class {
+    constructor(callback) {
+      this.callback = callback;
+      observers.push(this);
+    }
+    observe() {
+      this.observing = true;
+    }
+    disconnect() {
+      this.observing = false;
+    }
+  };
+  const item = h.item(1, "Combinatorial optimization");
+  const matches = Array.from({ length: 45 }, (_, i) => {
+    const candidate = h.item(i + 2, "Combinatorial optimization " + i);
+    return {
+      key: h.SWIndexer.docKey(candidate),
+      score: i < 40 ? 0.8 : 0.06,
+      weak: true,
+    };
+  });
+  h.SWSection.ensureSkeleton(h.body);
+  h.body._swToken = 1;
+  h.body._swMethod = "text";
+  let tagNeighbors;
+  h.SWSection.presentTags = async (_props, rows) => {
+    tagNeighbors = Array.from(rows, (r) => r.item.id);
+  };
+  const props = { body: h.body, item };
+  await h.SWSection._presentMatches(props, matches, "1/KEY1", 1);
+  assert.equal(h.body.querySelectorAll(".sw-row").length, 20);
+  assert.equal(tagNeighbors.length, 12);
+  const originalNeighbors = [...tagNeighbors];
+  h.body._swToken = 2;
+  await h.SWSection._presentMatches(props, matches, "1/KEY1", 2);
+  observers[0].callback([{ isIntersecting: true }]);
+  assert.equal(
+    h.body.querySelectorAll(".sw-row").length,
+    40,
+    "Refresh keeps the current paging callback valid",
+  );
+  assert.equal(h.body.querySelector(".sw-more"), null);
+  assert.deepEqual(tagNeighbors, originalNeighbors);
+  h.prefs.set("similar-works.maxRecommendations", 1);
+  await h.SWSection._presentMatches(props, matches, "1/KEY1", 2);
+  assert.equal(h.body.querySelectorAll(".sw-row").length, 1);
+  assert.deepEqual(
+    tagNeighbors,
+    originalNeighbors,
+    "Tag inputs do not depend on display quantity",
+  );
+  const stale = observers.at(-1);
+  h.SWSection.setStatus(h.body, "New selection");
+  stale.callback([{ isIntersecting: true }]);
+  assert.equal(h.body.querySelectorAll(".sw-row").length, 0);
+  assert.equal(stale.observing, false);
+});
+
+test("tag text reads a bounded existing cache once and invalidates with the source", async () => {
+  const h = harness(),
+    parent = h.item(1, "Discrete solvers");
+  const attachment = h.item(2, "Attachment", parent.id);
+  h.files.set(
+    "/cache/" + attachment.key,
+    "Lagrangian relaxation for binary decisions. ".repeat(2000),
+  );
+  h.corpus.docs.set("1/KEY1", { hash: "v1", weak: false });
+  let reads = 0;
+  h.context.IOUtils.read = async (_path, options) => {
+    reads++;
+    assert.equal(options.maxBytes, 24000);
+    return new TextEncoder()
+      .encode(h.files.get("/cache/" + attachment.key))
+      .slice(0, options.maxBytes);
+  };
+  const [a, b] = await Promise.all([
+    h.SWIndexer.tagText(parent),
+    h.SWIndexer.tagText(parent),
+  ]);
+  assert.equal(reads, 1);
+  assert.equal(a, b);
+  assert.ok(a.length <= 24000);
+  await h.SWIndexer.tagText(parent);
+  assert.equal(reads, 1);
+  h.corpus.docs.set("1/KEY1", { hash: "v2", weak: false });
+  await h.SWIndexer.tagText(parent);
+  assert.equal(reads, 2);
+  h.prefs.set("similar-works.requestMissingFulltext", true);
+  h.files.clear();
+  h.corpus.docs.set("1/KEY1", { hash: "v3", weak: true });
+  assert.equal(await h.SWIndexer.tagText(parent), "");
+  assert.deepEqual(
+    h.queued,
+    [],
+    "Tag reading never requests missing full text",
+  );
+});
+
+test("cancelled tag reads do not populate the session cache", async () => {
+  const h = harness(),
+    item = h.item(1, "Discrete solvers");
+  h.corpus.docs.set("1/KEY1", { hash: "v1", weak: false });
+  let finish,
+    active = true;
+  h.SWIndexer.extractText = () =>
+    new Promise((resolve) => {
+      finish = resolve;
+    });
+  const pending = h.SWIndexer.tagText(item, () => active);
+  active = false;
+  finish({ content: "Body text", weak: false });
+  assert.equal(await pending, "");
+  assert.equal(h.SWIndexer._tagText.size, 0);
+  assert.equal(h.SWIndexer._tagTextPending.size, 0);
+});
+
+test("shutdown waits for a failed cache read without retaining its resources", async () => {
+  const h = harness(),
+    item = h.item(1, "Discrete solvers");
+  let fail;
+  h.SWIndexer.extractText = () =>
+    new Promise((_resolve, reject) => {
+      fail = reject;
+    });
+  const read = h.SWIndexer.tagText(item);
+  const rejected = assert.rejects(read, /cache read failed/);
+  let finished = false;
+  const shutdown = h.SWIndexer.shutdown().then(() => {
+    finished = true;
+  });
+  await Promise.resolve();
+  assert.equal(finished, false);
+  fail(new Error("cache read failed"));
+  await Promise.all([rejected, shutdown]);
+  assert.equal(h.SWIndexer._tagText.size, 0);
+  assert.equal(h.SWIndexer._tagTextPending.size, 0);
+});
+
+test("a source change while reading discards the stale sample", async () => {
+  const h = harness(),
+    item = h.item(1, "Discrete solvers");
+  h.corpus.docs.set("1/KEY1", { hash: "old", weak: false });
+  let finish;
+  h.SWIndexer.extractText = () =>
+    new Promise((resolve) => {
+      finish = resolve;
+    });
+  const read = h.SWIndexer.tagText(item);
+  h.corpus.docs.set("1/KEY1", { hash: "new", weak: false });
+  finish({ content: "Stale body", weak: false });
+  assert.equal(await read, "");
+  assert.equal(h.SWIndexer._tagText.size, 0);
+});
+
+test("warm startup checks unchanged sources without per-item indexing delays", async () => {
+  const h = harness();
+  const items = [1, 2, 3].map((id) => h.item(id, "Neural machine learning"));
+  for (const item of items) await h.SWIndexer.processItem(item, 1);
+  const revision = h.corpus.revision;
+  const pauses = [];
+  h.Zotero.Promise.delay = async (ms) => {
+    pauses.push(ms);
+  };
+  h.SWIndexer._draining = true;
+  for (const item of items) h.SWIndexer.enqueue(item.id);
+  h.SWIndexer._draining = false;
+  await h.SWIndexer._drain();
+  assert.equal(h.corpus.revision, revision);
+  assert.equal(
+    pauses.reduce((sum, ms) => sum + ms, 0),
+    0,
+    "Unchanged items must not consume the 2-second indexing delay",
+  );
+  items[0].getField = (field) =>
+    field === "title" ? "Changed graph neural networks" : "";
+  h.SWIndexer.enqueue(items[0].id);
+  await h.SWIndexer._drainPromise;
+  assert.ok(
+    h.corpus.revision > revision,
+    "Changed metadata still updates the index",
+  );
+  assert.equal(
+    pauses.reduce((sum, ms) => sum + ms, 0),
+    2000,
+    "Expensive background updates remain paced",
+  );
+});
+
+test("startup queues each document once when the library contains its attachments", async () => {
+  const h = harness();
+  const parent = h.item(1, "Graph neural networks");
+  const a = h.item(2, "PDF", parent.id),
+    b = h.item(3, "Supplement", parent.id);
+  h.Zotero.Items.getAll = async () => [a.id, parent.id, b.id];
+  h.SWIndexer._draining = true;
+  await h.SWIndexer.enqueueLibrary();
+  assert.deepEqual(Array.from(h.SWIndexer._queue), [parent.id]);
+  assert.equal(h.SWIndexer._libraryTotal, 1);
+  assert.equal(h.SWIndexer._itemKeys.get(a.id).parentID, parent.id);
+  assert.equal(h.SWIndexer._itemKeys.get(b.id).parentID, parent.id);
+});
+
+function recommendationStore(h) {
+  const payloads = new Map();
+  h.corpus._db = {
+    async executeTransaction(work) {
+      return work();
+    },
+    async execute(sql, args) {
+      if (sql.startsWith("INSERT OR REPLACE INTO recommendations"))
+        payloads.set(args[0], args[1]);
+      if (sql.startsWith("UPDATE recommendations SET payload"))
+        payloads.set(args[1], args[0]);
+      if (sql.startsWith("SELECT payload"))
+        return payloads.has(args[0])
+          ? [{ getResultByName: () => payloads.get(args[0]) }]
+          : [];
+      if (sql.startsWith("SELECT cacheKey, payload"))
+        return [...payloads].map(([cacheKey, payload]) => ({
+          getResultByName: (name) => ({ cacheKey, payload })[name],
+        }));
+      return [];
+    },
+  };
+  return payloads;
+}
+
+test("persisted hybrid ranks retain channel scores and invalidate without cosine patching", async () => {
+  const h = harness();
+  await h.SWIndexer.processItem(h.item(1, "Molecule prediction"), 1);
+  const payloads = recommendationStore(h);
+  const snapshot = {
+    queryHash: h.corpus.docs.get("1/KEY1").hash,
+    revision: h.corpus.revision,
+    epoch: h.corpus.search.epoch,
+  };
+  const match = {
+    key: "1/KEY2",
+    score: 0.9,
+    lexicalScore: 0.3,
+    semanticScore: 0.7,
+    weak: true,
+  };
+  await h.corpus.saveHybridRecommendations(
+    "1/KEY1",
+    true,
+    [match],
+    snapshot,
+    "minilm",
+  );
+  h.corpus._recommendations.clear();
+  const cached = await h.corpus.getRecommendations("1/KEY1", true, "hybrid");
+  assert.deepEqual(JSON.parse(JSON.stringify(cached.matches)), [match]);
+  assert.equal(await h.corpus.getRecommendations("1/KEY1", true), null);
+  await h.SWIndexer.processItem(h.item(2, "Molecule prediction"), 1);
+  h.corpus._recommendations.clear();
+  const changed = await h.corpus.getRecommendations("1/KEY1", true, "hybrid");
+  assert.equal(changed.dirty, true);
+  assert.equal(changed.matches[0].score, 0.9);
+  assert.equal(changed.matches[0].semanticScore, 0.7);
+  const key = JSON.stringify(["1/KEY1", true, "hybrid"]);
+  const damaged = JSON.parse(payloads.get(key));
+  delete damaged.matches[0].semanticScore;
+  payloads.set(key, JSON.stringify(damaged));
+  h.corpus._recommendations.clear();
+  assert.equal(
+    await h.corpus.getRecommendations("1/KEY1", true, "hybrid"),
+    null,
+  );
+});
+
+test("cached rows are usable before the text index and semantic vectors finish loading", async () => {
+  const h = harness(),
+    query = h.item(1, "Molecule prediction");
+  const old = h.item(2, "Cached related paper"),
+    fresh = h.item(3, "Updated related paper");
+  await h.SWIndexer.processItem(query, 1);
+  recommendationStore(h);
+  const snapshot = {
+    queryHash: h.corpus.docs.get("1/KEY1").hash,
+    revision: h.corpus.revision,
+    epoch: h.corpus.search.epoch,
+  };
+  await h.corpus.saveHybridRecommendations(
+    "1/KEY1",
+    true,
+    [
+      {
+        key: h.SWIndexer.docKey(old),
+        score: 0.9,
+        lexicalScore: 0.3,
+        semanticScore: 0.7,
+      },
+    ],
+    snapshot,
+    "minilm",
+  );
+  h.corpus._recommendations.clear();
+  h.corpus.progress.phase = "loading";
+  let loadIndex,
+    loadVectors,
+    calculations = 0;
+  h.corpus._ready = new Promise((resolve) => {
+    loadIndex = resolve;
+  });
+  const vectors = new Promise((resolve) => {
+    loadVectors = resolve;
+  });
+  h.Zotero.isMac = true;
+  h.prefs.set("similar-works.backgroundIndexing", false);
+  h.SWTags.suggest = async () => [];
+  h.context.SWSemantic = {
+    version: "minilm",
+    _enabled: true,
+    status: { state: "loading" },
+    start: () => vectors,
+    getRecommendations: () => null,
+    enqueue() {},
+    saveRecommendations() {},
+    recommend: async () => {
+      calculations++;
+      return {
+        matches: [
+          {
+            key: h.SWIndexer.docKey(fresh),
+            score: 0.9,
+            lexicalScore: 0.4,
+            semanticScore: 0.8,
+          },
+        ],
+        snapshot,
+      };
+    },
+  };
+  const pending = h.SWSection.renderBody({ body: h.body, item: query });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(
+    h.body.querySelector(".sw-row").querySelector(".sw-title").textContent,
+    "Cached related paper",
+  );
+  assert.equal(h.body.querySelector(".sw-computation-progress").hidden, true);
+  assert.equal(h.body["aria-busy"], "false");
+  assert.equal(calculations, 0);
+  h.corpus.progress.phase = "ready";
+  loadIndex();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(calculations, 0);
+  assert.equal(
+    h.body.querySelector(".sw-row").querySelector(".sw-title").textContent,
+    "Cached related paper",
+  );
+  loadVectors();
+  await pending;
+  assert.equal(calculations, 1);
+  assert.equal(
+    h.body.querySelector(".sw-row").querySelector(".sw-title").textContent,
+    "Updated related paper",
+  );
+});
+
+test("a failed background index load preserves usable cached recommendations", async () => {
+  const h = harness(),
+    query = h.item(1, "Molecule prediction"),
+    related = h.item(2, "Cached related paper");
+  await h.SWIndexer.processItem(query, 1);
+  await h.corpus.saveRecommendations(
+    "1/KEY1",
+    true,
+    [{ key: h.SWIndexer.docKey(related), score: 0.8 }],
+    h.corpus.revision,
+    h.corpus.docs.get("1/KEY1").hash,
+  );
+  h.corpus.progress.phase = "loading";
+  let finish;
+  h.corpus._ready = new Promise((resolve) => {
+    finish = resolve;
+  });
+  const pending = h.SWSection.renderBody({ body: h.body, item: query });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(h.body.querySelectorAll(".sw-row").length, 1);
+  h.corpus.progress = { phase: "error", error: "Background restore failed" };
+  finish();
+  await pending;
+  assert.equal(h.body.querySelectorAll(".sw-row").length, 1);
+  assert.match(
+    h.body.querySelector(".sw-status").textContent,
+    /Background restore failed/,
+  );
+});
+
+test("match evidence stays hidden and dormant while its retained implementation remains usable", async () => {
+  const h = harness(),
+    query = h.item(1, "Graph neural networks"),
+    related = h.item(2, "Graph representation learning");
+  let comparisons = 0;
+  h.context.SWEvidence = {
+    compareItems: async () => {
+      comparisons++;
+      return {
+        terms: ["graph"],
+        current: { text: "Graph neural networks" },
+        match: { text: "Graph representation learning" },
+      };
+    },
+  };
+  h.body._swToken = 1;
+  h.SWSection.ensureSkeleton(h.body);
+  const wrapper = h.SWSection._createRow(
+    { body: h.body, item: query },
+    { item: related, score: 0.8 },
+    1,
+    0.8,
+    "",
+  );
+  h.body.querySelector(".sw-list").appendChild(wrapper);
+  const evidence = wrapper.querySelector(".sw-evidence");
+  assert.equal(evidence.hidden, true);
+  assert.equal(typeof evidence.listeners.toggle, "function");
+  evidence.open = true;
+  await evidence.listeners.toggle();
+  assert.equal(
+    comparisons,
+    0,
+    "Hidden evidence must not perform text comparisons",
+  );
+  evidence.hidden = false;
+  await evidence.listeners.toggle();
+  assert.equal(comparisons, 1);
+  assert.equal(evidence.querySelectorAll("blockquote").length, 2);
 });

@@ -3,11 +3,11 @@ var SW_CSS = `
 /* Constrain result text without changing Zotero's native sidebar geometry. */
 .sw-list { contain: inline-size; min-width: 0; display: flex; flex-direction: column; padding: 4px 0; font: 13px/1.4 var(--ui-font); color: var(--ui-fg); }
 .sw-computation-progress { display: block; width: calc(100% - 16px); height: 4px; margin: 4px 8px 8px; accent-color: var(--ui-accent); }
-.sw-computation-progress[hidden], .sw-source[hidden], .sw-tags[hidden] { display: none; }
+.sw-computation-progress[hidden], .sw-source[hidden], .sw-tags[hidden], .sw-evidence[hidden] { display: none; }
 .sw-status { padding: 6px 8px; color: var(--ui-muted); font-size: 12px; }
 .sw-row { position: relative; display: flex; align-items: flex-start; gap: 8px; padding: 9px 8px; border: 0; border-radius: 0; background: transparent; text-align: start; font: inherit; color: inherit; width: 100%; cursor: pointer; }
 /* Native button height limits must not clip wrapped recommendation titles. */
-.sw-list > button.sw-row { appearance: none; box-sizing: border-box; height: auto; max-height: none; min-height: 0; min-width: 0; margin: 0; flex-shrink: 0; white-space: normal; }
+.sw-list button.sw-row { appearance: none; box-sizing: border-box; height: auto; max-height: none; min-height: 0; min-width: 0; margin: 0; flex-shrink: 0; white-space: normal; }
 .sw-row::after { content: ""; position: absolute; inset-inline: 8px; bottom: 0; height: 1px; background: var(--ui-border); pointer-events: none; }
 .sw-row:last-child::after { display: none; }
 .sw-row:hover { background: var(--ui-hover); }
@@ -23,17 +23,20 @@ var SW_CSS = `
 .sw-num { font-size: 11px; font-weight: 500; color: var(--ui-accent); font-variant-numeric: tabular-nums; }
 .sw-track { width: 52px; height: 4px; border-radius: 2px; background: var(--ui-border); overflow: hidden; }
 .sw-bar { height: 100%; border-radius: 2px; background: var(--ui-accent); }
-.sw-tags { contain: inline-size; min-width: 0; margin: 4px 0 8px; padding: 8px; border-bottom: 1px solid var(--ui-border); font: 12px/1.5 var(--ui-font); }
-.sw-tag-new { color: var(--ui-fg); }
-.sw-tag-existing { color: var(--ui-muted); }
+.sw-tags { contain: inline-size; min-width: 0; margin: 4px 0 8px; padding: 8px; border-bottom: 1px solid var(--ui-border); font: 12px/1.5 var(--ui-font); color: var(--ui-fg); }
 .sw-tag-heading { display: flex; gap: 8px; align-items: center; justify-content: space-between; margin-bottom: 6px; }
 .sw-tag-heading strong { font-size: 12px; font-weight: 550; }
 .sw-tag-organize { font: inherit; font-size: 11px; background: transparent; border: 0; color: var(--ui-accent); padding: 2px; cursor: pointer; }
 .sw-tag-option { display: flex; gap: 6px; align-items: flex-start; padding: 4px 0; }
-.sw-tag-name { min-width: 0; flex: 1; overflow-wrap: anywhere; }
+.sw-tag-name { min-width: 0; flex: 1; overflow-wrap: anywhere; color: var(--ui-fg); }
 .sw-tag-support { flex: none; font-size: 11px; color: var(--ui-muted); }
 .sw-tag-apply { margin: 6px 0 0; font-size: 12px; }
 .sw-flag { font-size: 10px; color: var(--ui-muted); white-space: nowrap; }
+.sw-result { min-width: 0; }
+.sw-evidence { padding: 0 10px 8px 30px; font: 12px/1.5 var(--ui-font); }
+.sw-evidence summary { color: var(--ui-muted); cursor: pointer; }
+.sw-evidence p { margin: 6px 0; color: var(--ui-muted); }
+.sw-evidence blockquote { margin: 6px 0 10px; padding-inline-start: 10px; border-inline-start: 2px solid var(--ui-border); }
 `;
 
 var SWSection = {
@@ -64,6 +67,7 @@ var SWSection = {
       },
       onDestroy: ({ body }) => {
         body._swToken = (body._swToken || 0) + 1;
+        self._clearPaging(body);
         self._active = self._active.filter((e) => e.body !== body);
       },
       onItemChange: (props) => {
@@ -80,6 +84,7 @@ var SWSection = {
           }
         }
         if (!item || body._swSelectionKey !== SWIndexer.docKey(item)) {
+          self._clearPaging(body);
           body._swToken = (body._swToken || 0) + 1;
         }
         self._active = self._active.filter((e) => e.body !== body);
@@ -177,7 +182,7 @@ var SWSection = {
 
   async fmt(doc, id, args, fallback) {
     try {
-      var s = await doc.l10n.formatValue(id, args);
+      var s = await doc.l10n.formatValue(id, args || undefined);
       if (s) {
         return s;
       }
@@ -199,6 +204,7 @@ var SWSection = {
       status.hidden = !text;
     }
     if (!clearRows) return;
+    this._clearPaging(body);
     body._swTagRows = null;
     body._swTagSignature = null;
     const tags = body.querySelector(".sw-tags");
@@ -309,8 +315,36 @@ var SWSection = {
         );
       return;
     }
+    var target = await SWIndexer.resolveDocItem(item);
+    if (!target || body._swToken !== token || this._stopped) return;
+    var docKey = SWIndexer.docKey(target);
+    const method = Zotero.isMac ? "hybrid" : "text";
+    if (body._swMethod !== method) {
+      body._swMethod = method;
+      this.setStatus(body, "");
+    }
+    var includeWeak = SWPref("allowMetadataOnlyRecommendations", true);
+    let restored = null;
+    if (!compute) {
+      // Cached rows need the database, not the full in-memory search index.
+      await corpus.opened;
+      if (this._stopped || body._swToken !== token) return;
+      restored = await corpus.getRecommendations(docKey, includeWeak, method);
+      if (method === "hybrid" && restored?.model !== SWSemantic.version)
+        restored = null;
+      if (restored)
+        await this._presentMatches(
+          props,
+          restored.matches,
+          docKey,
+          token,
+          "similar-works-cached",
+          "Cached results",
+        );
+      if (this._stopped || body._swToken !== token) return;
+    }
     if (corpus.progress.phase !== "ready") {
-      if (!compute && corpus.progress.phase !== "error") {
+      if (!compute && !restored && corpus.progress.phase !== "error") {
         await show(
           "similar-works-preparing",
           null,
@@ -331,6 +365,19 @@ var SWSection = {
       var errDetail = corpus.progress.error
         ? " (" + corpus.progress.error + ")"
         : "";
+      if (restored) {
+        const message = await this.fmt(
+          doc,
+          "similar-works-unavailable",
+          null,
+          "Index unavailable",
+        );
+        if (body._swToken !== token || this._stopped) return;
+        this.setStatus(body, message + errDetail, false);
+        body.setAttribute("aria-busy", "false");
+        body.querySelector(".sw-computation-progress").hidden = true;
+        return;
+      }
       await show(
         "similar-works-unavailable",
         null,
@@ -341,24 +388,15 @@ var SWSection = {
     }
     if (corpus.progress.phase !== "ready") return;
 
-    var target = await SWIndexer.resolveDocItem(item);
-    if (!target || body._swToken !== token || this._stopped) return;
-    var docKey = SWIndexer.docKey(target);
-    const method = Zotero.isMac ? "hybrid" : "text";
-    if (body._swMethod !== method) {
-      body._swMethod = method;
-      this.setStatus(body, "");
-    }
     if (method === "hybrid") {
       await this._renderHybrid(props, target, docKey, token, compute);
       return;
     }
-    var includeWeak = SWPref("allowMetadataOnlyRecommendations", true);
     var cached = compute
       ? null
       : await corpus.getRecommendations(docKey, includeWeak);
     if (body._swToken !== token || this._stopped) return;
-    if (cached)
+    if (cached && cached !== restored)
       await this._presentMatches(
         props,
         cached.matches,
@@ -518,14 +556,18 @@ var SWSection = {
     );
     if (body._swToken !== token || this._stopped) return;
     if (!result) return;
-    SWSemantic.saveRecommendations(
+    const saving = SWSemantic.saveRecommendations(
       key,
       includeWeak,
       result.matches,
       result.snapshot,
     );
-    if (body._swToken !== token || this._stopped) return;
-    await this._presentMatches(props, result.matches, key, token);
+    try {
+      if (body._swToken !== token || this._stopped) return;
+      await this._presentMatches(props, result.matches, key, token);
+    } finally {
+      await saving;
+    }
   },
 
   async _presentMatches(
@@ -536,12 +578,11 @@ var SWSection = {
     statusID = "similar-works-updated",
     fallback = "Updated",
   ) {
-    var { body, setSectionSummary, tabType } = props;
+    var { body, setSectionSummary } = props;
     var doc = body.ownerDocument;
     var corpus = SWIndexer.corpus;
     if (setSectionSummary) setSectionSummary("");
-    var k = SWResultLimit(SWPref("maxRecommendations", 20));
-    var rows = await this._resolveRows(matches, k, body._swMethod);
+    var rows = await this._resolveRows(matches, body._swMethod);
     if (body._swToken !== token) {
       return;
     }
@@ -557,9 +598,10 @@ var SWSection = {
       if (body._swToken !== token || this._stopped) return;
       this.setStatus(body, emptyText);
       if (body._swToken !== token) return;
-      if (setSectionSummary) {
-        setSectionSummary("");
-      }
+      void this.presentTags(props, [], docKey, token).catch((error) =>
+        Zotero.logError(error),
+      );
+      if (setSectionSummary) setSectionSummary("");
       return;
     }
     var top = rows[0].score;
@@ -575,7 +617,9 @@ var SWSection = {
     var updated = await this.fmt(doc, statusID, null, fallback);
     if (this._stopped || body._swToken !== token) return;
     this.setStatus(body, updated + (queryWeak ? " · " + weakFlag : ""), false);
-    var signature = JSON.stringify(
+    const batch = SWResultLimit(SWPref("maxRecommendations", 20));
+    var signature = JSON.stringify([
+      batch,
       rows.map((r) => [
         r.item.id,
         r.item.getField("title"),
@@ -584,83 +628,219 @@ var SWSection = {
         r.score.toFixed(3),
         r.weak,
       ]),
-    );
-    void this.presentTags(props, rows, docKey, token).catch((error) =>
-      Zotero.logError(error),
+    ]);
+    void this.presentTags(props, rows.slice(0, 12), docKey, token).catch(
+      (error) => Zotero.logError(error),
     );
     if (this._stopped || body._swToken !== token) return;
-    if (body._swResultsSignature === signature) return;
-    var renderedRows = [];
-    var rank = 0;
-    for (let r of rows) {
-      var row = doc.createElementNS("http://www.w3.org/1999/xhtml", "button");
-      row.type = "button";
-      row.className = "sw-row";
-      var rankLabel = doc.createElementNS(
-        "http://www.w3.org/1999/xhtml",
-        "span",
-      );
-      rankLabel.className = "sw-rank";
-      rankLabel.textContent = String(++rank);
-      row.appendChild(rankLabel);
-      var main = doc.createElementNS("http://www.w3.org/1999/xhtml", "div");
-      main.className = "sw-main";
-      var title = doc.createElementNS("http://www.w3.org/1999/xhtml", "div");
-      title.className = "sw-title";
-      title.textContent = r.item.getField("title") || r.item.getDisplayTitle();
-      var meta = doc.createElementNS("http://www.w3.org/1999/xhtml", "div");
-      meta.className = "sw-meta";
-      var year = "";
-      try {
-        var m = String(r.item.getField("date") || "").match(/\d{4}/);
-        year = m ? m[0] : "";
-      } catch (e) {}
-      var creator = "";
-      try {
-        var cs = r.item.getCreators();
-        creator = cs && cs.length ? cs[0].lastName : "";
-      } catch (e) {}
-      meta.textContent = [year, creator].filter(Boolean).join(" · ");
-      main.appendChild(title);
-      main.appendChild(meta);
-
-      var side = doc.createElementNS("http://www.w3.org/1999/xhtml", "div");
-      side.className = "sw-side";
-      var num = doc.createElementNS("http://www.w3.org/1999/xhtml", "div");
-      num.className = "sw-num";
-      num.textContent =
-        body._swMethod === "hybrid" ? "" : (r.score * 100).toFixed(1) + "%";
-      var track = doc.createElementNS("http://www.w3.org/1999/xhtml", "div");
-      track.className = "sw-track";
-      var bar = doc.createElementNS("http://www.w3.org/1999/xhtml", "div");
-      bar.className = "sw-bar";
-      bar.style.width =
-        Math.max(3, (r.score / (top || 1)) * 100).toFixed(1) + "%";
-      track.appendChild(bar);
-      side.appendChild(num);
-      side.appendChild(track);
-
-      row.appendChild(main);
-      row.appendChild(side);
-      if (r.weak) {
-        var flag = doc.createElementNS("http://www.w3.org/1999/xhtml", "div");
-        flag.className = "sw-flag";
-        flag.textContent = weakFlag;
-        side.appendChild(flag);
-      }
-
-      let itemId = r.item.id;
-      let srcTabType = tabType;
-      row.addEventListener("click", () =>
-        this._selectItem(doc, itemId, srcTabType, props.item),
-      );
-      renderedRows.push(row);
+    if (body._swResultsSignature === signature && body._swPaging) {
+      body._swPaging.token = token;
+      body._swPaging.props = props;
+      return;
     }
-    list.replaceChildren(...renderedRows);
+    const visible =
+      body._swPaging?.key === docKey && body._swPaging.batch === batch
+        ? body._swPaging.next
+        : 0;
+    this._clearPaging(body);
+    list.replaceChildren();
+    const more = doc.createElementNS("http://www.w3.org/1999/xhtml", "button");
+    more.className = "sw-more";
+    more.type = "button";
+    more.textContent = await this.fmt(doc, "similar-works-more", null, "More");
+    if (this._stopped || body._swToken !== token) return;
+    const state = {
+      key: docKey,
+      token,
+      props,
+      rows,
+      next: 0,
+      batch,
+      weakFlag,
+      top,
+      more,
+      observer: null,
+    };
+    body._swPaging = state;
+    more.addEventListener("click", () => this._loadMore(body));
+    const Observer = doc.defaultView?.IntersectionObserver;
+    if (Observer)
+      state.observer = new Observer((entries) => {
+        if (
+          entries.some((entry) => entry.isIntersecting) &&
+          body._swPaging === state
+        )
+          this._loadMore(body);
+      });
+    this._loadMore(body, Math.max(batch, visible));
     body._swResultsSignature = signature;
-    if (setSectionSummary) {
-      setSectionSummary("");
+  },
+
+  _clearPaging(body) {
+    const state = body._swPaging;
+    if (!state) return;
+    state.observer?.disconnect();
+    state.more.remove();
+    body._swPaging = null;
+  },
+
+  _loadMore(body, count = body._swPaging?.batch) {
+    const state = body._swPaging;
+    if (
+      !state ||
+      this._stopped ||
+      !body.isConnected ||
+      body._swToken !== state.token
+    )
+      return;
+    state.observer?.disconnect();
+    state.more.remove();
+    const list = body.querySelector(".sw-list");
+    const end = Math.min(state.rows.length, state.next + count);
+    for (; state.next < end; state.next++)
+      list.appendChild(
+        this._createRow(
+          state.props,
+          state.rows[state.next],
+          state.next + 1,
+          state.top,
+          state.weakFlag,
+        ),
+      );
+    if (state.next < state.rows.length) {
+      list.appendChild(state.more);
+      state.observer?.observe(state.more);
     }
+  },
+
+  _createRow(props, r, rank, top, weakFlag) {
+    const doc = props.body.ownerDocument;
+    const method = props.body._swMethod;
+    var row = doc.createElementNS("http://www.w3.org/1999/xhtml", "button");
+    row.type = "button";
+    row.className = "sw-row";
+    var rankLabel = doc.createElementNS("http://www.w3.org/1999/xhtml", "span");
+    rankLabel.className = "sw-rank";
+    rankLabel.textContent = String(rank);
+    row.appendChild(rankLabel);
+    var main = doc.createElementNS("http://www.w3.org/1999/xhtml", "div");
+    main.className = "sw-main";
+    var title = doc.createElementNS("http://www.w3.org/1999/xhtml", "div");
+    title.className = "sw-title";
+    title.textContent = r.item.getField("title") || r.item.getDisplayTitle();
+    var meta = doc.createElementNS("http://www.w3.org/1999/xhtml", "div");
+    meta.className = "sw-meta";
+    var year = "";
+    try {
+      var m = String(r.item.getField("date") || "").match(/\d{4}/);
+      year = m ? m[0] : "";
+    } catch (e) {}
+    var creator = "";
+    try {
+      var cs = r.item.getCreators();
+      creator = cs && cs.length ? cs[0].lastName : "";
+    } catch (e) {}
+    meta.textContent = [year, creator].filter(Boolean).join(" · ");
+    main.appendChild(title);
+    main.appendChild(meta);
+
+    var side = doc.createElementNS("http://www.w3.org/1999/xhtml", "div");
+    side.className = "sw-side";
+    var num = doc.createElementNS("http://www.w3.org/1999/xhtml", "div");
+    num.className = "sw-num";
+    num.textContent =
+      method === "hybrid" ? "" : (r.score * 100).toFixed(1) + "%";
+    var track = doc.createElementNS("http://www.w3.org/1999/xhtml", "div");
+    track.className = "sw-track";
+    var bar = doc.createElementNS("http://www.w3.org/1999/xhtml", "div");
+    bar.className = "sw-bar";
+    bar.style.width =
+      Math.max(3, (r.score / (top || 1)) * 100).toFixed(1) + "%";
+    track.appendChild(bar);
+    side.appendChild(num);
+    side.appendChild(track);
+
+    row.appendChild(main);
+    row.appendChild(side);
+    if (r.weak) {
+      var flag = doc.createElementNS("http://www.w3.org/1999/xhtml", "div");
+      flag.className = "sw-flag";
+      flag.textContent = weakFlag;
+      side.appendChild(flag);
+    }
+
+    let itemId = r.item.id;
+    let srcTabType = props.tabType;
+    row.addEventListener("click", () =>
+      this._selectItem(doc, itemId, srcTabType, props.item),
+    );
+    const wrapper = doc.createElementNS("http://www.w3.org/1999/xhtml", "div");
+    wrapper.className = "sw-result";
+    const evidence = doc.createElementNS(
+      "http://www.w3.org/1999/xhtml",
+      "details",
+    );
+    evidence.className = "sw-evidence";
+    evidence.hidden = true;
+    const heading = doc.createElementNS(
+      "http://www.w3.org/1999/xhtml",
+      "summary",
+    );
+    heading.setAttribute("data-l10n-id", "similar-works-evidence");
+    evidence.append(heading);
+    let loaded = false,
+      loading = false;
+    const token = props.body._swToken;
+    const active = () =>
+      !this._stopped && wrapper.isConnected && props.body._swToken === token;
+    evidence.addEventListener("toggle", async () => {
+      if (evidence.hidden || !evidence.open || loading || loaded || !active())
+        return;
+      loading = true;
+      try {
+        const result = await SWEvidence.compareItems(
+          props.item,
+          r.item,
+          active,
+        );
+        if (!active() || !result) return;
+        const terms = doc.createElementNS("http://www.w3.org/1999/xhtml", "p");
+        terms.textContent =
+          result.terms.join(" · ") ||
+          (await this.fmt(doc, "similar-works-evidence-empty"));
+        evidence.append(terms);
+        for (const [key, label] of [
+          ["current", "similar-works-evidence-current"],
+          ["match", "similar-works-evidence-match"],
+        ]) {
+          if (!result[key].text) continue;
+          const title = doc.createElementNS(
+            "http://www.w3.org/1999/xhtml",
+            "strong",
+          );
+          title.textContent = await this.fmt(doc, label);
+          const excerpt = doc.createElementNS(
+            "http://www.w3.org/1999/xhtml",
+            "blockquote",
+          );
+          excerpt.textContent = result[key].text;
+          if (active()) evidence.append(title, excerpt);
+        }
+        loaded = true;
+      } catch (error) {
+        Zotero.logError(error);
+        if (active())
+          evidence.append(
+            doc.createTextNode(
+              await this.fmt(doc, "similar-works-evidence-failed"),
+            ),
+          );
+      } finally {
+        loading = false;
+      }
+    });
+    wrapper.append(row, evidence);
+    return wrapper;
   },
 
   async presentTags(props, rows, docKey, token) {
@@ -841,21 +1021,10 @@ var SWSection = {
     body._swTagSignature = tagSignature;
   },
 
-  async _resolveRows(matches, k, method = "text") {
+  async _resolveRows(matches, method = "text") {
     var out = [];
-    const configuredMinimum =
-      method === "hybrid" ? 0 : Number(SWPref("minimumSimilarity", 0.05));
-    const minimum =
-      Number.isFinite(configuredMinimum) &&
-      configuredMinimum >= 0 &&
-      configuredMinimum <= 1
-        ? configuredMinimum
-        : 0.05;
-    for (var m of matches) {
-      if (!Number.isFinite(m.score) || m.score < minimum) continue;
-      if (out.length >= k) {
-        break;
-      }
+    const minimum = Number(SWPref("minimumSimilarity", 0.05));
+    for (var m of SWSearch.relevant(matches, method, minimum)) {
       var idx = m.key.indexOf("/");
       if (idx < 1) {
         continue;
@@ -1009,7 +1178,10 @@ var SWSection = {
     if (this._preferencePane)
       Zotero.PreferencePanes.unregister(this._preferencePane);
     this._preferencePane = null;
-    for (var entry of this._active) entry.body._swToken++;
+    for (var entry of this._active) {
+      entry.body._swToken++;
+      this._clearPaging(entry.body);
+    }
     try {
       if (this._registered) {
         Zotero.ItemPaneManager.unregisterSection(this._registered);

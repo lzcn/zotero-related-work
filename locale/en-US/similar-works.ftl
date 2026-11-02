@@ -19,7 +19,7 @@ similar-works-progress =
     .aria-label = Similarity calculation progress
 
 similar-works-pref-limit =
-    .value = Maximum results
+    .value = Initial results
 similar-works-pref-metadata =
     .label = Include items without full text
 
@@ -182,3 +182,10 @@ similar-works-tags-format-button =
     .label = Format names
 
 similar-works-tags-match-alias = Terminology
+
+similar-works-more = More
+similar-works-evidence = Match evidence
+similar-works-evidence-current = Current paper
+similar-works-evidence-match = Matched paper
+similar-works-evidence-empty = No shared wording was located in the available text.
+similar-works-evidence-failed = Could not load the evidence. Try again.

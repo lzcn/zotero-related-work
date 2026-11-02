@@ -17,6 +17,8 @@ export const requiredFiles = [
   "src/semantic.js",
   "runtime/worker.js",
   "src/tags.js",
+  "src/tag-suggestions.js",
+  "src/retrieval-evidence.js",
   "src/graph.js",
   "content/graph.xhtml",
   "content/graph.js",

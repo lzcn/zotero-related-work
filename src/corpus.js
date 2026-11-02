@@ -32,6 +32,9 @@ var SWCorpus = class {
     this._dbPath = null;
     this.progress = { phase: "idle", done: 0, total: 0 };
     this._ready = null;
+    this._opened = new Promise((resolve) => {
+      this._resolveOpened = resolve;
+    });
   }
 
   get ready() {
@@ -39,6 +42,11 @@ var SWCorpus = class {
       this._ready = this._openAndLoad();
     }
     return this._ready;
+  }
+
+  get opened() {
+    void this.ready;
+    return this._opened;
   }
 
   async _openAndLoad() {
@@ -60,6 +68,7 @@ var SWCorpus = class {
       if (this._stopped) return;
       await this._db.execute("PRAGMA journal_mode = WAL");
       await this._db.executeTransaction(() => this._ensureSchema());
+      this._resolveOpened();
       await this._loadAll();
     } catch (e) {
       if (this._stopped) return;
@@ -75,6 +84,8 @@ var SWCorpus = class {
       // A rejected schema must not keep the database handle and shutdown
       // blocker alive after the user has been told the index is unavailable.
       await this._closeDatabase();
+    } finally {
+      this._resolveOpened();
     }
   }
 
@@ -173,7 +184,7 @@ var SWCorpus = class {
     var damagedError = null;
     while (!this._stopped) {
       var rows = await this._db.execute(
-        "SELECT d.key, d.hash, d.weak, f.counts, f.signature, f.epoch, f.simhash FROM docs d LEFT JOIN fingerprints f ON f.key = d.key WHERE d.key > ? ORDER BY d.key LIMIT ?",
+        "SELECT d.key, d.hash, d.weak, f.counts, f.signature, f.epoch, f.simhash, s.itemModifiedAt, s.sourceHash FROM docs d LEFT JOIN fingerprints f ON f.key = d.key LEFT JOIN source_updates s ON s.key = d.key WHERE d.key > ? ORDER BY d.key LIMIT ?",
         [lastKey, chunk],
       );
       if (!rows.length) {
@@ -214,6 +225,12 @@ var SWCorpus = class {
         };
         if (!doc.signature) rebuild = true;
         this._memInsert(key, doc, false);
+        const modifiedAt = row.getResultByName("itemModifiedAt");
+        if (
+          typeof modifiedAt === "string" &&
+          row.getResultByName("sourceHash") === doc.hash
+        )
+          this._sourceStates.set(key, JSON.stringify([modifiedAt, doc.hash]));
         if (Date.now() - sliceStarted >= 6) {
           await swYield(5);
           sliceStarted = Date.now();
@@ -588,8 +605,12 @@ var SWCorpus = class {
     }
   }
 
-  async getRecommendations(queryKey, includeWeak) {
-    var cacheKey = JSON.stringify([queryKey, includeWeak]);
+  async getRecommendations(queryKey, includeWeak, method = "text") {
+    var cacheKey = JSON.stringify(
+      method === "hybrid"
+        ? [queryKey, includeWeak, method]
+        : [queryKey, includeWeak],
+    );
     var cached = this._recommendations.get(cacheKey);
     if (!cached && this._db) {
       try {
@@ -603,7 +624,12 @@ var SWCorpus = class {
         Zotero.logError(e);
       }
     }
-    if (!this._validRecommendations(cached)) return null;
+    if (
+      !this._validRecommendations(cached) ||
+      (cached.method || "text") !== method ||
+      (method === "hybrid" && cached.queryKey !== queryKey)
+    )
+      return null;
     this._recommendations.delete(cacheKey);
     this._recommendations.set(cacheKey, cached);
     while (this._recommendations.size > 1000)
@@ -615,6 +641,7 @@ var SWCorpus = class {
     return (
       cached &&
       cached.algorithm === 5 &&
+      (cached.method === undefined || cached.method === "hybrid") &&
       typeof cached.queryHash === "string" &&
       Number.isInteger(cached.epoch) &&
       cached.epoch >= 0 &&
@@ -628,7 +655,11 @@ var SWCorpus = class {
           typeof m.key === "string" &&
           Number.isFinite(m.score) &&
           m.score >= 0 &&
-          m.score <= 1,
+          m.score <= 1 &&
+          (cached.method !== "hybrid" ||
+            [m.lexicalScore, m.semanticScore].every(
+              (score) => Number.isFinite(score) && score >= 0 && score <= 1,
+            )),
       )
     );
   }
@@ -667,6 +698,40 @@ var SWCorpus = class {
       computedAt: Date.now(),
       matches: matches.slice(0, 100),
     };
+    await this._storeRecommendations(cacheKey, cached);
+  }
+
+  async saveHybridRecommendations(
+    queryKey,
+    includeWeak,
+    matches,
+    snapshot,
+    model,
+  ) {
+    if (
+      this._stopped ||
+      snapshot.revision !== this.revision ||
+      snapshot.epoch !== this.search.epoch ||
+      snapshot.queryHash !== this.docs.get(queryKey)?.hash
+    )
+      return;
+    const cached = {
+      algorithm: 5,
+      method: "hybrid",
+      model,
+      queryKey,
+      ...snapshot,
+      computedAt: Date.now(),
+      matches: matches.slice(0, 100),
+    };
+    await this._storeRecommendations(
+      JSON.stringify([queryKey, includeWeak, "hybrid"]),
+      cached,
+    );
+  }
+
+  async _storeRecommendations(cacheKey, cached) {
+    if (this._stopped) return;
     this._recommendations.set(cacheKey, cached);
     while (this._recommendations.size > 1000)
       this._recommendations.delete(this._recommendations.keys().next().value);
@@ -726,7 +791,10 @@ var SWCorpus = class {
       const [queryKey, includeWeak] = JSON.parse(cacheKey);
       const query = this.search.docs.get(queryKey);
       const before = cached.matches.some((m) => m.key === changedKey);
-      if (queryKey === changedKey) cached.dirty = true;
+      if (cached.method === "hybrid") {
+        // A text-source change invalidates fusion; never patch cosine into RRF.
+        if (queryKey.split("/")[0] === changedLibrary) cached.dirty = true;
+      } else if (queryKey === changedKey) cached.dirty = true;
       else if (
         cached.epoch === this.search.epoch &&
         query &&

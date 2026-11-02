@@ -103,8 +103,8 @@ function fixture({
 test("repeated startup and shutdown register and close once", async () => {
   const h = fixture();
   await Promise.all([h.context.startup(h.data), h.context.startup(h.data)]);
-  assert.equal(h.state.loads.length, 9);
-  assert.equal(new Set(h.state.loads).size, 9);
+  assert.equal(h.state.loads.length, 11);
+  assert.equal(new Set(h.state.loads).size, 11);
   assert.ok(h.state.loads.some((uri) => uri.endsWith("search.js")));
   assert.equal(h.state.starts, 1);
   assert.equal(h.state.registered, 1);
