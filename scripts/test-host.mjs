@@ -660,7 +660,11 @@ startup = async function(data) {
         await semantic._build(SWScope.SWIndexer.docKey(diffusionPaper));
         const semanticTags = await SWScope.SWTags.suggest(diffusionPaper,[{item:diffusionNeighbor,score:0.8}]);
         if (semanticTags.some(tag=>unsupportedTopics.includes(tag.name)) || !semanticTags.some(tag=>tag.isNew)) throw new Error("Native MiniLM tag ranking lost topic evidence");
-        await semantic.saveRecommendations(queryKey, true, hybrid.matches, hybrid.snapshot);
+        // Faster background inference can finish additional vectors after the
+        // earlier ranking. Cache only a ranking from the completed vector set.
+        await semantic._running;
+        const latestHybrid = await semantic.recommend(queryKey, 10, key => key.startsWith(item.libraryID + "/"));
+        await semantic.saveRecommendations(queryKey, true, latestHybrid.matches, latestHybrid.snapshot);
         if (!semantic.recommendationsFresh(semantic.getRecommendations(queryKey,true),queryKey)) throw new Error("Hybrid host cache is stale immediately after retrieval");
         const hybridBody = doc.createElementNS("http://www.w3.org/1999/xhtml","div");
         doc.documentElement.appendChild(hybridBody);

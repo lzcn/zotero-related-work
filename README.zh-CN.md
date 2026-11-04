@@ -96,6 +96,10 @@ npm run build
 
 产物：`dist/zotero-related-work.xpi`。`npm run test:host` 使用临时 Zotero 目录；`npm run release` 在 `release/v<版本>/` 准备本地文件，不上传。
 
+推理共用分词、切块、聚合和排序算法。`inference-backend.h` 负责 ONNX 执行与 CPU 回退，`coreml-backend.h` 提供 macOS 后端；Core ML 初始化或执行失败会回退到 CPU。目前原生打包支持 macOS，其他平台适配尚未实现。`SW_NATIVE_MODEL_DIR=/path/to/model node scripts/test-native.mjs` 使用临时缓存核对 CPU 与 Core ML 的向量和排序一致性。
+
+`node scripts/benchmark-search.mjs` 使用固定合成数据测量索引重建、指纹解码和检索，不读取个人文献库。排序摘要用于核对优化前后的结果；耗时不包含 Zotero 存储和原生模型推理。
+
 ## 许可证
 
 Copyright © 2026 Zhi Lu. [AGPL-3.0-or-later](LICENSE)。代码借助 ChatGPT 和 DeepSeek 开发。

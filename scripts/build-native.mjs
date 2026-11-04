@@ -113,6 +113,9 @@ export async function buildNative() {
     .sort();
   const input = await digest([
     join(root, "native/inference.mm"),
+    join(root, "native/inference-backend.h"),
+    join(root, "native/coreml-backend.h"),
+    join(root, "native/embedding.h"),
     fileURLToPath(import.meta.url),
     ...headers.map((name) => join(sdk, "include", name)),
     join(sdk, `lib/libonnxruntime.${version}.dylib`),

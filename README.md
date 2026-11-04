@@ -96,6 +96,10 @@ npm run build
 
 Output: `dist/zotero-related-work.xpi`. `npm run test:host` uses disposable Zotero directories. `npm run release` prepares local files under `release/v<version>/` without uploading.
 
+Inference shares one algorithm for tokenization, chunking, pooling and ranking. `inference-backend.h` owns ONNX execution and CPU fallback; `coreml-backend.h` supplies the macOS provider. Core ML initialization or execution failure falls back to the CPU backend. Native packaging currently supports macOS; other platform adapters are not implemented. `SW_NATIVE_MODEL_DIR=/path/to/model node scripts/test-native.mjs` checks CPU/Core ML vector and rank agreement using temporary caches.
+
+`node scripts/benchmark-search.mjs` measures deterministic index rebuilding, signature decoding and retrieval without using a personal library. It reports a ranking digest for before/after comparisons; timings exclude Zotero storage and native model inference.
+
 ## License
 
 Copyright © 2026 Zhi Lu. [AGPL-3.0-or-later](LICENSE). Code developed with ChatGPT and DeepSeek.

@@ -198,12 +198,13 @@ var SWCorpus = class {
         try {
           counts = row.getResultByName("counts");
           if (!counts) throw new Error("Missing stored feature counts");
+          counts = new Uint8Array(counts);
           var tf = SWSearch.decodeCounts(counts);
           signature =
             row.getResultByName("epoch") === this.search.epoch
               ? row.getResultByName("signature")
               : null;
-          if (signature) SWSearch.decodeSignature(signature);
+          if (signature) signature = SWSearch.decodeSignature(signature);
           var storedSimhash = row.getResultByName("simhash");
           if (storedSimhash) {
             SWSearch.decodeSimhash(storedSimhash);
@@ -222,6 +223,7 @@ var SWCorpus = class {
           tf: tf,
           signature: signature,
           simhash: simhash,
+          counts: counts,
         };
         if (!doc.signature) rebuild = true;
         this._memInsert(key, doc, false);
@@ -288,7 +290,14 @@ var SWCorpus = class {
   }
 
   _memInsert(key, doc, bump) {
-    this.search.add(key, doc.tf, doc.weak, doc.signature, doc.simhash);
+    this.search.add(
+      key,
+      doc.tf,
+      doc.weak,
+      doc.signature,
+      doc.simhash,
+      doc.counts,
+    );
     this.docs.set(key, { hash: doc.hash, weak: doc.weak });
     this.n = this.docs.size;
     this.df = this.search.df;

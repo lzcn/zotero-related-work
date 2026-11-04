@@ -6,6 +6,8 @@
 #include <cmath>
 #include <memory>
 #include <sys/resource.h>
+#include "coreml-backend.h"
+#include "embedding.h"
 
 static void reply(NSDictionary *value) {
   NSData *bytes = [NSJSONSerialization dataWithJSONObject:value options:0 error:nil];
@@ -17,34 +19,11 @@ int main(int argc, const char *argv[]) {
   @autoreleasepool {
     if (argc < 2 || argc > 3) return 2;
     setpriority(PRIO_PROCESS, 0, 10);
-    Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "related-work");
-    std::unique_ptr<Ort::Session> session;
-    bool coreml = argc != 3 || std::string(argv[2]) != "cpu";
-    auto load = [&](bool accelerated) {
-      Ort::SessionOptions options;
-      options.SetIntraOpNumThreads(1);
-      options.SetInterOpNumThreads(1);
-      Ort::ThrowOnError(Ort::GetApi().AddFreeDimensionOverrideByName(options, "batch_size", 1));
-      Ort::ThrowOnError(Ort::GetApi().AddFreeDimensionOverrideByName(options, "sequence_length", 256));
-      if (accelerated) {
-        NSString *cache = [[@(argv[1]) stringByDeletingLastPathComponent] stringByAppendingPathComponent:@"coreml-cache"];
-        [[NSFileManager defaultManager] createDirectoryAtPath:cache withIntermediateDirectories:YES attributes:nil error:nil];
-        options.AppendExecutionProvider("CoreML", {
-          {"ModelFormat", "MLProgram"}, {"MLComputeUnits", "ALL"},
-          {"RequireStaticInputShapes", "1"}, {"ModelCacheDirectory", cache.UTF8String}
-        });
-      }
-      return std::make_unique<Ort::Session>(env, argv[1], options);
-    };
+    const bool accelerated = argc != 3 || std::string(argv[2]) != "cpu";
+    std::string cache = std::string(argv[1]).substr(0, std::string(argv[1]).find_last_of("/")) + "/coreml-cache";
     try {
-      try { session = load(coreml); }
-      catch (const std::exception &error) {
-        if (!coreml) throw;
-        std::cerr << "Core ML initialization failed: " << error.what() << std::endl;
-        coreml = false;
-        session = load(false);
-      }
-      reply(@{@"ready": @YES, @"backend": coreml ? @"coreml+cpu" : @"cpu"});
+      InferenceBackend model(argv[1], accelerated ? coreMLBackend(cache) : InferenceBackend::Factory{}, "coreml+cpu");
+      reply(@{@"ready": @YES, @"backend": @(model.backend())});
       std::string line;
       while (std::getline(std::cin, line)) {
         @autoreleasepool {
@@ -75,29 +54,14 @@ int main(int argc, const char *argv[]) {
               inputs.push_back(Ort::Value::CreateTensor<int64_t>(memory, values->data(), 256, shape, 2));
             const char *names[] = {"input_ids", "attention_mask", "token_type_ids"};
             const char *outputNames[] = {"last_hidden_state"};
-            std::vector<Ort::Value> outputs;
-            try { outputs = session->Run(Ort::RunOptions{nullptr}, names, inputs.data(), 3, outputNames, 1); }
-            catch (const std::exception &error) {
-              if (!coreml) throw;
-              std::cerr << "Core ML inference failed: " << error.what() << std::endl;
-              coreml = false; session = load(false);
-              outputs = session->Run(Ort::RunOptions{nullptr}, names, inputs.data(), 3, outputNames, 1);
-            }
+            auto outputs = model.run(names, inputs, outputNames);
             if (outputs[0].GetTensorTypeAndShapeInfo().GetElementCount() != 256 * 384)
               throw std::runtime_error("Invalid output dimensions");
             const float *hidden = outputs[0].GetTensorData<float>();
-            std::vector<double> vector(384, 0);
-            double count = 0, norm = 0;
-            for (size_t t = 0; t < 256; ++t) if (attention[t]) {
-              ++count;
-              for (size_t d = 0; d < 384; ++d) vector[d] += hidden[t * 384 + d];
-            }
-            if (!count) throw std::runtime_error("Empty input");
-            for (auto &value : vector) { value /= count; norm += value * value; }
-            if (!std::isfinite(norm) || norm <= 0) throw std::runtime_error("Invalid output values");
-            NSMutableArray *result = [NSMutableArray arrayWithCapacity:384];
-            for (double value : vector) [result addObject:@(value / std::sqrt(norm))];
-            reply(@{@"vector": result, @"backend": coreml ? @"coreml+cpu" : @"cpu"});
+            const auto vector = poolEmbedding(hidden, attention);
+            NSMutableArray *result = [NSMutableArray arrayWithCapacity:vector.size()];
+            for (double value : vector) [result addObject:@(value)];
+            reply(@{@"vector": result, @"backend": @(model.backend())});
           } catch (const std::exception &error) { reply(@{@"error": @(error.what())}); }
         }
       }
