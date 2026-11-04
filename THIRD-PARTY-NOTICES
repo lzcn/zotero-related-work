@@ -34,3 +34,7 @@ Source: https://github.com/huggingface/transformers/blob/v4.57.1/src/transformer
 The macOS native helper uses separately downloaded ONNX Runtime 1.22.0 (MIT).
 Its license and third-party notices are included under runtime/. Model weights
 are also downloaded separately; the MiniLM model uses Apache-2.0.
+
+Search candidate selection bundles FastPriorityQueue (Apache-2.0).
+Source: https://github.com/lemire/FastPriorityQueue.js
+The upstream license is included as runtime/fastpriorityqueue-LICENSE.

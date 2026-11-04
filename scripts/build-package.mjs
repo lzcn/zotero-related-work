@@ -71,6 +71,20 @@ for (const name of [
   await add(name);
 for (const name of ["src", "icons", "locale", "content", "data"])
   await addDirectory(name);
+// Bundle the independent retrieval engine with its upstream priority queue.
+const search = await build({
+  entryPoints: [join(root, "src/search.js")],
+  bundle: true,
+  write: false,
+  platform: "browser",
+  format: "iife",
+  globalName: "SWSearchModule",
+  footer: { js: "var SWSearch = SWSearchModule.SWSearch;" },
+});
+files["src/search.js"] = search.outputFiles[0].contents;
+files["runtime/fastpriorityqueue-LICENSE"] = await readFile(
+  join(root, "node_modules/fastpriorityqueue/LICENSE"),
+);
 // Validate the same script paths that Zotero's bootstrap loads.
 const bootstrap = files["bootstrap.js"].toString("utf8");
 const scriptList = bootstrap.match(/var files = \[([^\]]+)\]/);

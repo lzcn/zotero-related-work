@@ -1,4 +1,5 @@
 export const requiredFiles = [
+  "runtime/fastpriorityqueue-LICENSE",
   "content/ui.css",
   "content/preferences.css",
   "data/tag-terms.json",
